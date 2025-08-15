@@ -17,24 +17,33 @@ export default function Dashboard() {
 
   const navigate = useNavigate();
 
-  // Check session safely
+  // Check session and listen for auth changes (supports email/password & OAuth)
   useEffect(() => {
+    let mounted = true;
+
     const checkSession = async () => {
       const { data } = await supabase.auth.getSession();
-      if (data.session) {
+      if (mounted && data.session) {
         setUser(data.session.user);
         fetchUserExtra(data.session.user.id);
-      } else {
-        navigate("/signin");
+      } else if (mounted) {
+        navigate("/"); // redirect to AuthPage if no session
       }
     };
     checkSession();
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) navigate("/signin");
+      if (!session) navigate("/"); // redirect to AuthPage if logged out
+      else {
+        setUser(session.user);
+        fetchUserExtra(session.user.id); // update user info after Google login
+      }
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, [navigate]);
 
   const fetchUserExtra = async (userId) => {
@@ -99,21 +108,26 @@ export default function Dashboard() {
     const data = await res.json();
     setLoading(false);
 
-    if (res.ok) setSubmissionMessage(`Data ingested successfully! ${data.chunks_count} chunks stored.`);
+    if (res.ok)
+      setSubmissionMessage(
+        `Data ingested successfully! ${data.chunks_count} chunks stored.`
+      );
     else setSubmissionMessage(`Error: ${data.error}`);
   };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    navigate("/signin");
+    navigate("/"); // redirect to AuthPage
   };
 
-  if (!user) return <p>Loading...</p>;
+  if (!user) return <p>Loading your account...</p>;
 
   return (
     <div className="p-6 max-w-md mx-auto space-y-4">
       <h1 className="text-2xl font-bold">Welcome, {user.email}</h1>
-      <Button className="mb-4" onClick={handleSignOut}>Sign Out</Button>
+      <Button className="mb-4" onClick={handleSignOut}>
+        Sign Out
+      </Button>
 
       {/* Company info section */}
       <h2 className="text-xl font-semibold">Company Information</h2>
@@ -131,11 +145,16 @@ export default function Dashboard() {
         {loading ? "Saving..." : "Save Company Info"}
       </Button>
       <p className="text-sm text-gray-500">
-        Status: <span className={status === "approved" ? "text-green-500" : "text-red-500"}>{status}</span>
+        Status:{" "}
+        <span
+          className={status === "approved" ? "text-green-500" : "text-red-500"}
+        >
+          {status}
+        </span>
       </p>
       {message && <p className="text-sm text-yellow-600">{message}</p>}
 
-      {/* Only show URL/PDF submission if approved */}
+      {/* URL/PDF submission */}
       {status === "approved" && (
         <div className="mt-6 space-y-2">
           <h2 className="text-xl font-semibold">Submit URL / PDF</h2>
@@ -152,7 +171,9 @@ export default function Dashboard() {
           <Button onClick={handleSubmission} disabled={loading}>
             {loading ? "Submitting..." : "Submit"}
           </Button>
-          {submissionMessage && <p className="text-sm text-green-500">{submissionMessage}</p>}
+          {submissionMessage && (
+            <p className="text-sm text-green-500">{submissionMessage}</p>
+          )}
         </div>
       )}
 
