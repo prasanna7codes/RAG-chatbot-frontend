@@ -14,10 +14,11 @@ export default function Dashboard() {
   const [urlToSubmit, setUrlToSubmit] = useState("");
   const [pdfFile, setPdfFile] = useState(null);
   const [submissionMessage, setSubmissionMessage] = useState("");
+  const [iframeSnippet, setIframeSnippet] = useState("");
 
   const navigate = useNavigate();
 
-  // Check session and listen for auth changes (supports email/password & OAuth)
+  // Check session and listen for auth changes
   useEffect(() => {
     let mounted = true;
 
@@ -27,16 +28,16 @@ export default function Dashboard() {
         setUser(data.session.user);
         fetchUserExtra(data.session.user.id);
       } else if (mounted) {
-        navigate("/"); // redirect to AuthPage if no session
+        navigate("/"); // redirect to AuthPage
       }
     };
     checkSession();
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) navigate("/"); // redirect to AuthPage if logged out
+      if (!session) navigate("/");
       else {
         setUser(session.user);
-        fetchUserExtra(session.user.id); // update user info after Google login
+        fetchUserExtra(session.user.id);
       }
     });
 
@@ -94,30 +95,41 @@ export default function Dashboard() {
 
     setLoading(true);
     setSubmissionMessage("");
+    setIframeSnippet("");
 
     const formData = new FormData();
     formData.append("client_id", user.id);
+    formData.append("company_name", companyName); // send company name
     if (urlToSubmit) formData.append("url", urlToSubmit);
     if (pdfFile) formData.append("pdf", pdfFile);
 
-    const res = await fetch("http://localhost:8000/ingest/", {
-      method: "POST",
-      body: formData,
-    });
+    try {
+      const res = await fetch("http://localhost:8000/ingest/", {
+        method: "POST",
+        body: formData,
+      });
 
-    const data = await res.json();
-    setLoading(false);
+      const data = await res.json();
+      setLoading(false);
 
-    if (res.ok)
-      setSubmissionMessage(
-        `Data ingested successfully! ${data.chunks_count} chunks stored.`
-      );
-    else setSubmissionMessage(`Error: ${data.error}`);
+      if (res.ok) {
+        setSubmissionMessage(`Data ingested successfully! ${data.chunks_count} chunks stored.`);
+        // Show iframe snippet for embedding chatbot
+        setIframeSnippet(
+          `<iframe src="https://your-saas-domain.com/chatbot?company=${encodeURIComponent(companyName)}" width="400" height="600"></iframe>`
+        );
+      } else {
+        setSubmissionMessage(`Error: ${data.error}`);
+      }
+    } catch (err) {
+      setLoading(false);
+      setSubmissionMessage(`Error: ${err.message}`);
+    }
   };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    navigate("/"); // redirect to AuthPage
+    navigate("/");
   };
 
   if (!user) return <p>Loading your account...</p>;
@@ -125,9 +137,7 @@ export default function Dashboard() {
   return (
     <div className="p-6 max-w-md mx-auto space-y-4">
       <h1 className="text-2xl font-bold">Welcome, {user.email}</h1>
-      <Button className="mb-4" onClick={handleSignOut}>
-        Sign Out
-      </Button>
+      <Button className="mb-4" onClick={handleSignOut}>Sign Out</Button>
 
       {/* Company info section */}
       <h2 className="text-xl font-semibold">Company Information</h2>
@@ -135,22 +145,22 @@ export default function Dashboard() {
         placeholder="Company Name"
         value={companyName}
         onChange={(e) => setCompanyName(e.target.value)}
+        disabled={status !== "pending"} // Prevent changing after submission
       />
       <Input
         placeholder="Company URL"
         value={companyUrl}
         onChange={(e) => setCompanyUrl(e.target.value)}
+        disabled={status !== "pending"} // Prevent changing after submission
       />
-      <Button onClick={handleCompanySubmit} disabled={loading}>
+      <Button
+        onClick={handleCompanySubmit}
+        disabled={loading || status !== "pending"}
+      >
         {loading ? "Saving..." : "Save Company Info"}
       </Button>
       <p className="text-sm text-gray-500">
-        Status:{" "}
-        <span
-          className={status === "approved" ? "text-green-500" : "text-red-500"}
-        >
-          {status}
-        </span>
+        Status: <span className={status === "approved" ? "text-green-500" : "text-red-500"}>{status}</span>
       </p>
       {message && <p className="text-sm text-yellow-600">{message}</p>}
 
@@ -171,8 +181,12 @@ export default function Dashboard() {
           <Button onClick={handleSubmission} disabled={loading}>
             {loading ? "Submitting..." : "Submit"}
           </Button>
-          {submissionMessage && (
-            <p className="text-sm text-green-500">{submissionMessage}</p>
+          {submissionMessage && <p className="text-sm text-green-500">{submissionMessage}</p>}
+          {iframeSnippet && (
+            <div className="mt-4">
+              <h3 className="font-semibold">Embed this chatbot in your website:</h3>
+              <code className="block p-2 bg-gray-100 rounded">{iframeSnippet}</code>
+            </div>
           )}
         </div>
       )}
