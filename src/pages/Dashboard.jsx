@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useNavigate } from "react-router-dom";
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -10,27 +11,31 @@ export default function Dashboard() {
   const [status, setStatus] = useState("pending");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-
   const [urlToSubmit, setUrlToSubmit] = useState("");
   const [pdfFile, setPdfFile] = useState(null);
   const [submissionMessage, setSubmissionMessage] = useState("");
 
+  const navigate = useNavigate();
+
+  // Check session safely
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    const checkSession = async () => {
+      const { data } = await supabase.auth.getSession();
       if (data.session) {
         setUser(data.session.user);
         fetchUserExtra(data.session.user.id);
       } else {
-        window.location.href = "/signin";
+        navigate("/signin");
       }
-    });
+    };
+    checkSession();
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) window.location.href = "/signin";
+      if (!session) navigate("/signin");
     });
 
     return () => listener.subscription.unsubscribe();
-  }, []);
+  }, [navigate]);
 
   const fetchUserExtra = async (userId) => {
     const { data } = await supabase
@@ -62,7 +67,7 @@ export default function Dashboard() {
           id: user.id,
           company_name: companyName,
           company_url: companyUrl,
-          status: "pending", // Reset status to pending
+          status: "pending",
         },
       ]);
 
@@ -81,7 +86,6 @@ export default function Dashboard() {
     setLoading(true);
     setSubmissionMessage("");
 
-    // Example: send to your FastAPI backend
     const formData = new FormData();
     formData.append("client_id", user.id);
     if (urlToSubmit) formData.append("url", urlToSubmit);
@@ -101,7 +105,7 @@ export default function Dashboard() {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    window.location.href = "/signin";
+    navigate("/signin");
   };
 
   if (!user) return <p>Loading...</p>;

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useNavigate } from "react-router-dom";
 
 export default function Signin() {
   const [email, setEmail] = useState("");
@@ -9,29 +10,34 @@ export default function Signin() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  // Redirect already logged-in users
+  const navigate = useNavigate();
+
+  // Redirect returning users with active session
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    const checkSession = async () => {
+      const { data } = await supabase.auth.getSession();
       if (data.session) {
-        window.location.href = "/dashboard";
+        navigate("/dashboard");
       }
-    });
-  }, []);
+    };
+    checkSession();
+  }, [navigate]);
 
   const handleSignin = async () => {
     setLoading(true);
     setMessage("");
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+
     setLoading(false);
 
     if (error) {
       setMessage(error.message);
     } else {
-      // Redirect to dashboard after successful login
-      window.location.href = "/dashboard";
+      navigate("/dashboard");
     }
   };
 
