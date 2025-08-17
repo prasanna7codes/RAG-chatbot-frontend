@@ -46,7 +46,7 @@ export default function ChatbotWidget() {
     setLoading(true);
 
     try {
-      const res = await fetch("http://localhost:8000/query/", {
+      const res = await fetch("https://saas-backend-taqu.onrender.com/query/", {
         method: "POST",
         // MODIFIED: Send API key in header and remove company name from body
         headers: {
