@@ -1,3 +1,5 @@
+// pages/Dashboard.jsx
+
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
@@ -15,25 +17,28 @@ export default function Dashboard() {
   const [pdfFile, setPdfFile] = useState(null);
   const [submissionMessage, setSubmissionMessage] = useState("");
   const [iframeSnippet, setIframeSnippet] = useState("");
+  const [publicApiKey, setPublicApiKey] = useState(""); // MODIFIED: Added state for key
 
   const navigate = useNavigate();
 
-  // Check session and listen for auth changes
   useEffect(() => {
     let mounted = true;
 
-    const checkSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (mounted && data.session) {
-        setUser(data.session.user);
-        fetchUserExtra(data.session.user.id);
-      } else if (mounted) {
-        navigate("/"); // redirect to AuthPage
+    const fetchUserData = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (mounted) {
+        if (session) {
+          setUser(session.user);
+          fetchUserExtra(session.user.id);
+        } else {
+          navigate("/");
+        }
       }
     };
-    checkSession();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    fetchUserData();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) navigate("/");
       else {
         setUser(session.user);
@@ -43,7 +48,7 @@ export default function Dashboard() {
 
     return () => {
       mounted = false;
-      listener.subscription.unsubscribe();
+      authListener.subscription.unsubscribe();
     };
   }, [navigate]);
 
@@ -58,6 +63,14 @@ export default function Dashboard() {
       setCompanyName(data.company_name || "");
       setCompanyUrl(data.company_url || "");
       setStatus(data.status || "pending");
+      setPublicApiKey(data.public_api_key || ""); // MODIFIED: Set the API key state
+
+      // MODIFIED: Generate snippet if user is approved and has a key
+      if (data.status === "approved" && data.public_api_key) {
+        setIframeSnippet(
+          `<iframe src="http://localhost:5173/chatbot?apiKey=${data.public_api_key}" width="400" height="600"></iframe>`
+        );
+      }
     }
   };
 
@@ -66,58 +79,34 @@ export default function Dashboard() {
       setMessage("Please fill in both fields.");
       return;
     }
-
     setLoading(true);
     setMessage("");
-
     const { error } = await supabase
       .from("users_extra")
-      .upsert([
-        {
-          id: user.id,
-          company_name: companyName,
-          company_url: companyUrl,
-          status: "pending",
-        },
-      ]);
-
+      .upsert([{ id: user.id, company_name: companyName, company_url: companyUrl, status: "pending" }]);
     setLoading(false);
-
     if (error) setMessage(error.message);
-    else setMessage("Company info saved! Wait for approval.");
+    else setMessage("Company info saved! Please wait for approval.");
   };
 
   const handleSubmission = async () => {
     if (!urlToSubmit && !pdfFile) {
-      setSubmissionMessage("Please provide URL or PDF.");
+      setSubmissionMessage("Please provide a URL or a PDF file.");
       return;
     }
-
     setLoading(true);
     setSubmissionMessage("");
-    setIframeSnippet("");
-
     const formData = new FormData();
-    formData.append("client_id", user.id);
-    formData.append("company_name", companyName); // send company name
+    formData.append("client_id", user.id); // Safe, as user is authenticated
     if (urlToSubmit) formData.append("url", urlToSubmit);
     if (pdfFile) formData.append("pdf", pdfFile);
 
     try {
-      const res = await fetch("http://localhost:8000/ingest/", {
-        method: "POST",
-        body: formData,
-      });
-
+      const res = await fetch("http://localhost:8000/ingest/", { method: "POST", body: formData });
       const data = await res.json();
       setLoading(false);
-
       if (res.ok) {
         setSubmissionMessage(`Data ingested successfully! ${data.chunks_count} chunks stored.`);
-        // Show iframe snippet for embedding chatbot
-        setIframeSnippet(
-          `<iframe src="https://your-saas-domain.com/chatbot?company=${encodeURIComponent(companyName)}" width="400" height="600"></iframe>`
-        );
       } else {
         setSubmissionMessage(`Error: ${data.error}`);
       }
@@ -135,65 +124,50 @@ export default function Dashboard() {
   if (!user) return <p>Loading your account...</p>;
 
   return (
-    <div className="p-6 max-w-md mx-auto space-y-4">
-      <h1 className="text-2xl font-bold">Welcome, {user.email}</h1>
-      <Button className="mb-4" onClick={handleSignOut}>Sign Out</Button>
+    <div className="p-6 max-w-2xl mx-auto space-y-4">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Welcome, {user.email}</h1>
+        <Button onClick={handleSignOut}>Sign Out</Button>
+      </div>
 
-      {/* Company info section */}
-      <h2 className="text-xl font-semibold">Company Information</h2>
-      <Input
-        placeholder="Company Name"
-        value={companyName}
-        onChange={(e) => setCompanyName(e.target.value)}
-        disabled={status !== "pending"} // Prevent changing after submission
-      />
-      <Input
-        placeholder="Company URL"
-        value={companyUrl}
-        onChange={(e) => setCompanyUrl(e.target.value)}
-        disabled={status !== "pending"} // Prevent changing after submission
-      />
-      <Button
-        onClick={handleCompanySubmit}
-        disabled={loading || status !== "pending"}
-      >
-        {loading ? "Saving..." : "Save Company Info"}
-      </Button>
-      <p className="text-sm text-gray-500">
-        Status: <span className={status === "approved" ? "text-green-500" : "text-red-500"}>{status}</span>
-      </p>
-      {message && <p className="text-sm text-yellow-600">{message}</p>}
+      <div className="p-4 border rounded-lg space-y-2">
+        <h2 className="text-xl font-semibold">Company Information</h2>
+        <Input placeholder="Company Name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} disabled={status !== "pending"} />
+        <Input placeholder="Company URL" value={companyUrl} onChange={(e) => setCompanyUrl(e.target.value)} disabled={status !== "pending"} />
+        <Button onClick={handleCompanySubmit} disabled={loading || status !== "pending"}>
+          {loading ? "Saving..." : "Save Company Info"}
+        </Button>
+        <p className="text-sm text-gray-500">
+          Status: <span className={status === "approved" ? "text-green-500 font-bold" : "text-yellow-500 font-bold"}>{status}</span>
+        </p>
+        {message && <p className="text-sm text-blue-600">{message}</p>}
+      </div>
 
-      {/* URL/PDF submission */}
       {status === "approved" && (
-        <div className="mt-6 space-y-2">
-          <h2 className="text-xl font-semibold">Submit URL / PDF</h2>
-          <Input
-            placeholder="Website URL"
-            value={urlToSubmit}
-            onChange={(e) => setUrlToSubmit(e.target.value)}
-          />
-          <input
-            type="file"
-            accept=".pdf"
-            onChange={(e) => setPdfFile(e.target.files[0])}
-          />
+        <div className="p-4 border rounded-lg space-y-2">
+          <h2 className="text-xl font-semibold">Submit Your Data</h2>
+          <Input placeholder="Website URL to crawl" value={urlToSubmit} onChange={(e) => setUrlToSubmit(e.target.value)} />
+          <p>Or upload a PDF document:</p>
+          <Input type="file" accept=".pdf" onChange={(e) => setPdfFile(e.target.files[0])} />
           <Button onClick={handleSubmission} disabled={loading}>
-            {loading ? "Submitting..." : "Submit"}
+            {loading ? "Submitting..." : "Submit Data"}
           </Button>
-          {submissionMessage && <p className="text-sm text-green-500">{submissionMessage}</p>}
-          {iframeSnippet && (
-            <div className="mt-4">
-              <h3 className="font-semibold">Embed this chatbot in your website:</h3>
-              <code className="block p-2 bg-gray-100 rounded">{iframeSnippet}</code>
-            </div>
-          )}
+          {submissionMessage && <p className="text-sm text-green-600">{submissionMessage}</p>}
+        </div>
+      )}
+
+      {/* MODIFIED: Show snippet section only if approved and key exists */}
+      {status === "approved" && publicApiKey && (
+        <div className="p-4 border rounded-lg space-y-2">
+          <h2 className="text-xl font-semibold">Embed Your Chatbot</h2>
+          <p className="text-sm text-gray-600">Copy this code and paste it into your website's HTML where you want the chatbot to appear.</p>
+          <code className="block p-3 bg-gray-100 rounded text-sm break-all">{iframeSnippet}</code>
         </div>
       )}
 
       {status !== "approved" && (
         <p className="text-sm text-yellow-600 mt-4">
-          Your company info is pending approval. You cannot submit URL/PDF yet.
+          Your company information is pending approval. Once approved, you can submit data and get your chatbot embed code.
         </p>
       )}
     </div>
