@@ -68,7 +68,7 @@ export default function Dashboard() {
       // MODIFIED: Generate snippet if user is approved and has a key
       if (data.status === "approved" && data.public_api_key) {
         setIframeSnippet(
-          `<iframe src="https://rag-chatbot-frontend-orcin.vercel.app/chatbot?apiKey=${data.public_api_key}" width="400" height="600"></iframe>`
+          `<iframe src="http://localhost:5173/chatbot?apiKey=${data.public_api_key}" width="400" height="600"></iframe>`
         );
       }
     }
@@ -102,7 +102,7 @@ export default function Dashboard() {
     if (pdfFile) formData.append("pdf", pdfFile);
 
     try {
-      const res = await fetch("https://saas-backend-taqu.onrender.com/ingest/", { method: "POST", body: formData });
+      const res = await fetch("http://localhost:8000/ingest/", { method: "POST", body: formData });
       const data = await res.json();
       setLoading(false);
       if (res.ok) {
