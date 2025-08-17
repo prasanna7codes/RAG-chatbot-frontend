@@ -102,7 +102,7 @@ export default function Dashboard() {
     if (pdfFile) formData.append("pdf", pdfFile);
 
     try {
-      const res = await fetch("http://localhost:8000/ingest/", { method: "POST", body: formData });
+      const res = await fetch("https://saas-backend-taqu.onrender.com/ingest/", { method: "POST", body: formData });
       const data = await res.json();
       setLoading(false);
       if (res.ok) {
