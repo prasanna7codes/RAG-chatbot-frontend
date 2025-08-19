@@ -46,7 +46,7 @@ export default function ChatbotWidget() {
     setLoading(true);
 
     try {
-      const res = await fetch("https://rag-with-cloud-embedding.onrender.com/query/", {
+      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
         method: "POST",
         // MODIFIED: Send API key in header and remove company name from body
         headers: {
