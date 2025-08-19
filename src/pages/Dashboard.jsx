@@ -74,20 +74,34 @@ export default function Dashboard() {
     }
   };
 
+
+  const normalizeDomain = (url) => {
+  try {
+    const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+};
+
   const handleCompanySubmit = async () => {
-    if (!companyName || !companyUrl) {
-      setMessage("Please fill in both fields.");
-      return;
-    }
-    setLoading(true);
-    setMessage("");
-    const { error } = await supabase
-      .from("users_extra")
-      .upsert([{ id: user.id, company_name: companyName, company_url: companyUrl, status: "pending" }]);
-    setLoading(false);
-    if (error) setMessage(error.message);
-    else setMessage("Company info saved! Please wait for approval.");
-  };
+  if (!companyName || !companyUrl) {
+    setMessage("Please fill in both fields.");
+    return;
+  }
+  setLoading(true);
+  setMessage("");
+
+  const normalizedUrl = normalizeDomain(companyUrl);
+
+  const { error } = await supabase
+    .from("users_extra")
+    .upsert([{ id: user.id, company_name: companyName, company_url: normalizedUrl, status: "pending" }]);
+
+  setLoading(false);
+  if (error) setMessage(error.message);
+  else setMessage("Company info saved! Please wait for approval.");
+};
 
   const handleSubmission = async () => {
     if (!urlToSubmit && !pdfFile) {
