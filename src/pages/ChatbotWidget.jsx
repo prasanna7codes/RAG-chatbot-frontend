@@ -51,7 +51,8 @@ export default function ChatbotWidget() {
         // MODIFIED: Send API key in header and remove company name from body
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": apiKey, 
+          "X-API-Key": apiKey,
+          "X-Client-Domain": window.location.hostname 
         },
         body: JSON.stringify({
           question: input,
