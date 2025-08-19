@@ -70,7 +70,7 @@ export default function Dashboard() {
 
       if (data.status === "approved" && data.public_api_key) {
         setIframeSnippet(
-          `<iframe src="http://localhost:5173/chatbot?apiKey=${data.public_api_key}" width="400" height="600"></iframe>`
+          `<iframe src="https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${data.public_api_key}" width="400" height="600"></iframe>`
         );
       }
     }
