@@ -1,5 +1,3 @@
-// pages/Dashboard.jsx
-
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
@@ -17,7 +15,11 @@ export default function Dashboard() {
   const [pdfFile, setPdfFile] = useState(null);
   const [submissionMessage, setSubmissionMessage] = useState("");
   const [iframeSnippet, setIframeSnippet] = useState("");
-  const [publicApiKey, setPublicApiKey] = useState(""); // MODIFIED: Added state for key
+  const [publicApiKey, setPublicApiKey] = useState("");
+  const [allowedOrigins, setAllowedOrigins] = useState([]);
+  const [newOrigin, setNewOrigin] = useState("");
+
+  const [domainsLocked, setDomainsLocked] = useState(false);
 
   const navigate = useNavigate();
 
@@ -63,9 +65,9 @@ export default function Dashboard() {
       setCompanyName(data.company_name || "");
       setCompanyUrl(data.company_url || "");
       setStatus(data.status || "pending");
-      setPublicApiKey(data.public_api_key || ""); // MODIFIED: Set the API key state
+      setPublicApiKey(data.public_api_key || "");
+      setAllowedOrigins(data.allowed_origins || []);
 
-      // MODIFIED: Generate snippet if user is approved and has a key
       if (data.status === "approved" && data.public_api_key) {
         setIframeSnippet(
           `<iframe src="http://localhost:5173/chatbot?apiKey=${data.public_api_key}" width="400" height="600"></iframe>`
@@ -74,35 +76,37 @@ export default function Dashboard() {
     }
   };
 
-
   const normalizeDomain = (url) => {
-  try {
-    const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
-    return parsed.hostname.toLowerCase();
-  } catch {
-    return url.toLowerCase();
-  }
-};
+    try {
+      const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
+      let hostname = parsed.hostname.toLowerCase();
+      return hostname.startsWith("www.") ? hostname.slice(4) : hostname;
+    } catch {
+      return url.toLowerCase();
+    }
+  };
 
+  // Company info submission
   const handleCompanySubmit = async () => {
-  if (!companyName || !companyUrl) {
-    setMessage("Please fill in both fields.");
-    return;
-  }
-  setLoading(true);
-  setMessage("");
+    if (!companyName || !companyUrl) {
+      setMessage("Please fill in both fields.");
+      return;
+    }
+    setLoading(true);
+    setMessage("");
 
-  const normalizedUrl = normalizeDomain(companyUrl);
+    const normalizedUrl = normalizeDomain(companyUrl);
 
-  const { error } = await supabase
-    .from("users_extra")
-    .upsert([{ id: user.id, company_name: companyName, company_url: normalizedUrl, status: "pending" }]);
+    const { error } = await supabase
+      .from("users_extra")
+      .upsert([{ id: user.id, company_name: companyName, company_url: normalizedUrl, status: "pending" }]);
 
-  setLoading(false);
-  if (error) setMessage(error.message);
-  else setMessage("Company info saved! Please wait for approval.");
-};
+    setLoading(false);
+    if (error) setMessage(error.message);
+    else setMessage("Company info saved! Please wait for approval.");
+  };
 
+  // URL/PDF submission
   const handleSubmission = async () => {
     if (!urlToSubmit && !pdfFile) {
       setSubmissionMessage("Please provide a URL or a PDF file.");
@@ -111,7 +115,7 @@ export default function Dashboard() {
     setLoading(true);
     setSubmissionMessage("");
     const formData = new FormData();
-    formData.append("client_id", user.id); // Safe, as user is authenticated
+    formData.append("client_id", user.id);
     if (urlToSubmit) formData.append("url", urlToSubmit);
     if (pdfFile) formData.append("pdf", pdfFile);
 
@@ -130,6 +134,29 @@ export default function Dashboard() {
     }
   };
 
+  // Allowed domains
+  const addOrigin = () => {
+    if (!newOrigin) return;
+    const normalized = normalizeDomain(newOrigin);
+    if (!allowedOrigins.includes(normalized)) setAllowedOrigins([...allowedOrigins, normalized]);
+    setNewOrigin("");
+  };
+
+  const removeOrigin = (domain) => setAllowedOrigins(allowedOrigins.filter((d) => d !== domain));
+
+  const saveOrigins = async () => {
+  const { error } = await supabase
+    .from("users_extra")
+    .update({ allowed_origins: allowedOrigins })
+    .eq("id", user.id);
+
+  if (error) alert("Error saving domains: " + error.message);
+  else {
+    alert("Allowed domains updated successfully!");
+    setDomainsLocked(true); // Freeze the inputs
+  }
+};
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     navigate("/");
@@ -144,6 +171,7 @@ export default function Dashboard() {
         <Button onClick={handleSignOut}>Sign Out</Button>
       </div>
 
+      {/* Company info */}
       <div className="p-4 border rounded-lg space-y-2">
         <h2 className="text-xl font-semibold">Company Information</h2>
         <Input placeholder="Company Name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} disabled={status !== "pending"} />
@@ -157,6 +185,7 @@ export default function Dashboard() {
         {message && <p className="text-sm text-blue-600">{message}</p>}
       </div>
 
+      {/* URL / PDF submission */}
       {status === "approved" && (
         <div className="p-4 border rounded-lg space-y-2">
           <h2 className="text-xl font-semibold">Submit Your Data</h2>
@@ -170,7 +199,27 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* MODIFIED: Show snippet section only if approved and key exists */}
+      {/* Allowed domains */}
+      {status === "approved" && (
+        <div className="p-4 border rounded-lg space-y-2">
+          <h2 className="text-xl font-semibold">Allowed Domains</h2>
+          <div className="flex gap-2 mb-2">
+            <Input placeholder="Add domain (example.com)" value={newOrigin} onChange={(e) => setNewOrigin(e.target.value)} />
+            <Button onClick={addOrigin}>Add</Button>
+          </div>
+          <ul className="list-disc ml-5 mb-2">
+            {allowedOrigins.map((d, i) => (
+              <li key={i} className="flex justify-between items-center">
+                {d} <Button onClick={() => removeOrigin(d)} variant="destructive" size="sm">Remove</Button>
+              </li>
+            ))}
+          </ul>
+          <Button onClick={saveOrigins}>Save Allowed Domains</Button>
+        </div>
+      )}
+      
+
+      {/* Embed chatbot */}
       {status === "approved" && publicApiKey && (
         <div className="p-4 border rounded-lg space-y-2">
           <h2 className="text-xl font-semibold">Embed Your Chatbot</h2>
@@ -181,7 +230,7 @@ export default function Dashboard() {
 
       {status !== "approved" && (
         <p className="text-sm text-yellow-600 mt-4">
-          Your company information is pending approval. Once approved, you can submit data and get your chatbot embed code.
+          Your company information is pending approval. Once approved, you can submit data, manage domains, and get your chatbot embed code.
         </p>
       )}
     </div>
