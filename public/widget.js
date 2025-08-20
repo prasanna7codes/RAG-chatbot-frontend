@@ -1,4 +1,5 @@
 (function() {
+  // This script runs on the client's website.
   const scriptTag = document.currentScript;
   const apiKey = scriptTag.getAttribute("data-api-key");
 
@@ -7,9 +8,15 @@
     return;
   }
 
+  // *** CHANGE #1: Get the actual client's domain ***
+  const clientDomain = window.location.hostname;
+
   // Create iframe
   const iframe = document.createElement("iframe");
-  iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}`;
+  // *** CHANGE #2: Pass the client's domain in the iframe's URL ***
+  iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}&clientDomain=${encodeURIComponent(clientDomain)}`;
+  
+  // --- The rest of your styles are perfect, no changes needed ---
   iframe.style.position = "fixed";
   iframe.style.bottom = "80px";
   iframe.style.right = "20px";
@@ -23,7 +30,7 @@
 
   document.body.appendChild(iframe);
 
-  // Floating button
+  // Floating button (no changes needed here)
   const button = document.createElement("button");
   button.innerHTML = "💬";
   button.style.position = "fixed";
