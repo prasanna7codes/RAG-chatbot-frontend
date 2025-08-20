@@ -8,7 +8,6 @@ import { X, Loader2 } from "lucide-react";
 
 export default function ChatWindow({ onClose }) {
   const [apiKey, setApiKey] = useState("");
-  // *** CHANGE #1: Add state for the client's domain ***
   const [clientDomain, setClientDomain] = useState("");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -17,23 +16,16 @@ export default function ChatWindow({ onClose }) {
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Load apiKey and clientDomain from the URL query string
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const key = params.get("apiKey");
-    // *** CHANGE #2: Read the clientDomain from the URL ***
     const domain = params.get("clientDomain");
 
-    if (key) {
-      setApiKey(key);
-    } else {
-      console.error("Chatbot API Key not found in URL.");
-    }
-    if (domain) {
-      setClientDomain(domain);
-    } else {
-      console.error("Client Domain not found in URL.");
-    }
+    if (key) setApiKey(key);
+    else console.error("Chatbot API Key not found in URL.");
+    
+    if (domain) setClientDomain(domain);
+    else console.error("Client Domain not found in URL.");
   }, []);
 
   useEffect(() => {
@@ -45,7 +37,6 @@ export default function ChatWindow({ onClose }) {
   }, []);
 
   const sendMessage = async () => {
-    // Also check for clientDomain before sending
     if (!input.trim() || !apiKey || !clientDomain) return;
 
     const userMessage = { sender: "user", text: input };
@@ -58,7 +49,6 @@ export default function ChatWindow({ onClose }) {
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": apiKey,
-          // *** CHANGE #3: Use the domain from the URL for the header ***
           "X-Client-Domain": clientDomain,
         },
         body: JSON.stringify({
@@ -86,9 +76,9 @@ export default function ChatWindow({ onClose }) {
     inputRef.current?.focus();
   };
 
-  // --- No changes needed for the JSX return part ---
+  // *** CHANGE: Removed 'fixed' positioning and set width/height to 100% to fill the iframe ***
   return (
-    <Card className="fixed bottom-20 right-6 w-[26rem] h-[30rem] flex flex-col rounded-3xl shadow-2xl overflow-hidden border-2 border-blue-400 bg-white/60 backdrop-blur-md">
+    <Card className="w-full h-full flex flex-col rounded-3xl shadow-2xl overflow-hidden border-2 border-blue-400 bg-white/60 backdrop-blur-md">
       <div className="flex justify-between items-center p-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white">
         <h2 className="text-lg font-bold">AI Assistant</h2>
         <Button
