@@ -1,8 +1,6 @@
-(function() {
-  // This script runs on the client's website.
+(function () {
   const scriptTag = document.currentScript;
   const apiKey = scriptTag.getAttribute("data-api-key");
-
   if (!apiKey) {
     console.error("Chatbot: Missing data-api-key attribute in script tag");
     return;
@@ -12,26 +10,24 @@
 
   // Create iframe
   const iframe = document.createElement("iframe");
-  iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}&clientDomain=${encodeURIComponent(clientDomain)}`;
-  
-  // --- STYLE CHANGES ARE HERE ---
+  iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}&clientDomain=${encodeURIComponent(
+    clientDomain
+  )}`;
   iframe.style.position = "fixed";
-  iframe.style.bottom = "80px"; // Distance from bottom of screen
-  iframe.style.right = "20px";  // Distance from right of screen
-  
-  // *** ADJUST THESE VALUES TO CHANGE THE CHATBOT SIZE ***
-  iframe.style.width = "350px";  // Smaller width (was 400px)
-  iframe.style.height = "500px"; // Smaller height (was 600px)
-  
+  iframe.style.bottom = "90px";
+  iframe.style.right = "20px";
+  iframe.style.width = "360px";
+  iframe.style.height = "520px";
   iframe.style.border = "none";
   iframe.style.zIndex = "99999";
-  iframe.style.borderRadius = "12px";
-  iframe.style.boxShadow = "0 4px 20px rgba(0,0,0,0.2)";
-  iframe.style.display = "none"; // start hidden
-
+  iframe.style.borderRadius = "20px";
+  iframe.style.boxShadow = "0 8px 30px rgba(0,0,0,0.25)";
+  iframe.style.backdropFilter = "blur(20px)";
+  iframe.style.background = "rgba(255,255,255,0.05)";
+  iframe.style.display = "none"; // hidden by default
   document.body.appendChild(iframe);
 
-  // Floating button (no changes needed here)
+  // Floating glassy button
   const button = document.createElement("button");
   button.innerHTML = "💬";
   button.style.position = "fixed";
@@ -39,14 +35,25 @@
   button.style.right = "20px";
   button.style.zIndex = "100000";
   button.style.borderRadius = "50%";
-  button.style.width = "60px";
-  button.style.height = "60px";
-  button.style.background = "linear-gradient(90deg,#3b82f6,#9333ea)";
+  button.style.width = "64px";
+  button.style.height = "64px";
+  button.style.background = "rgba(255, 255, 255, 0.15)";
+  button.style.backdropFilter = "blur(10px)";
+  button.style.border = "1px solid rgba(255,255,255,0.2)";
   button.style.color = "white";
-  button.style.fontSize = "24px";
+  button.style.fontSize = "28px";
   button.style.cursor = "pointer";
-  button.style.border = "none";
-  button.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
+  button.style.boxShadow = "0 6px 20px rgba(0,0,0,0.25)";
+  button.style.transition = "all 0.3s ease";
+
+  button.onmouseenter = () => {
+    button.style.transform = "scale(1.05)";
+    button.style.background = "rgba(255,255,255,0.25)";
+  };
+  button.onmouseleave = () => {
+    button.style.transform = "scale(1)";
+    button.style.background = "rgba(255,255,255,0.15)";
+  };
 
   button.onclick = () => {
     iframe.style.display = iframe.style.display === "none" ? "block" : "none";
