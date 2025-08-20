@@ -8,20 +8,21 @@
     return;
   }
 
-  // *** CHANGE #1: Get the actual client's domain ***
   const clientDomain = window.location.hostname;
 
   // Create iframe
   const iframe = document.createElement("iframe");
-  // *** CHANGE #2: Pass the client's domain in the iframe's URL ***
   iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}&clientDomain=${encodeURIComponent(clientDomain)}`;
   
-  // --- The rest of your styles are perfect, no changes needed ---
+  // --- STYLE CHANGES ARE HERE ---
   iframe.style.position = "fixed";
-  iframe.style.bottom = "80px";
-  iframe.style.right = "20px";
-  iframe.style.width = "400px";
-  iframe.style.height = "600px";
+  iframe.style.bottom = "80px"; // Distance from bottom of screen
+  iframe.style.right = "20px";  // Distance from right of screen
+  
+  // *** ADJUST THESE VALUES TO CHANGE THE CHATBOT SIZE ***
+  iframe.style.width = "350px";  // Smaller width (was 400px)
+  iframe.style.height = "500px"; // Smaller height (was 600px)
+  
   iframe.style.border = "none";
   iframe.style.zIndex = "99999";
   iframe.style.borderRadius = "12px";
