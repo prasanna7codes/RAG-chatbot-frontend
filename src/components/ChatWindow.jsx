@@ -18,13 +18,23 @@ export default function ChatWindow({ onClose }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setApiKey(params.get("apiKey") || "");
-    setClientDomain(params.get("clientDomain") || "");
+    const key = params.get("apiKey");
+    const domain = params.get("clientDomain");
+
+    if (key) setApiKey(key);
+    else console.error("Chatbot API Key not found in URL.");
+
+    if (domain) setClientDomain(domain);
+    else console.error("Client Domain not found in URL.");
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   const sendMessage = async () => {
     if (!input.trim() || !apiKey || !clientDomain) return;
@@ -32,7 +42,6 @@ export default function ChatWindow({ onClose }) {
     const userMessage = { sender: "user", text: input };
     setMessages((prev) => [...prev, userMessage]);
     setLoading(true);
-    setInput("");
 
     try {
       const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
@@ -42,25 +51,37 @@ export default function ChatWindow({ onClose }) {
           "X-API-Key": apiKey,
           "X-Client-Domain": clientDomain,
         },
-        body: JSON.stringify({ question: input }),
+        body: JSON.stringify({
+          question: input,
+        }),
       });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.detail || `HTTP error! Status: ${res.status}`);
+      }
 
       const data = await res.json();
       const aiMessage = { sender: "ai", text: data.answer || "Sorry, I could not find an answer." };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
-      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ Error: ${error.message}` }]);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: `⚠️ Error: ${error.message}` },
+      ]);
     }
+
+    setInput("");
     setLoading(false);
     inputRef.current?.focus();
   };
 
   return (
-    <Card className="w-full h-full flex flex-col rounded-2xl border-0 shadow-xl overflow-hidden bg-white/10 backdrop-blur-lg">
+    <Card className="w-full h-full flex flex-col bg-background border shadow-elegant overflow-hidden">
       {/* Header */}
-      <div className="flex justify-between items-center p-4 bg-gradient-to-r from-blue-500/80 to-purple-600/80 backdrop-blur-lg text-white">
+      <div className="flex justify-between items-center p-4 bg-gradient-primary text-white border-b">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-white/30 rounded-full flex items-center justify-center">
+          <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
             <Bot className="w-4 h-4" />
           </div>
           <div>
@@ -81,39 +102,36 @@ export default function ChatWindow({ onClose }) {
       </div>
 
       {/* Messages */}
-      <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-transparent">
+      <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-muted/30">
         {messages.length === 0 && (
-          <div className="text-center py-10">
-            <div className="w-14 h-14 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
-              <Bot className="w-7 h-7 text-white" />
+          <div className="text-center py-8">
+            <div className="w-12 h-12 bg-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
+              <Bot className="w-6 h-6 text-white" />
             </div>
-            <h3 className="font-semibold text-white mb-2">Welcome to InsightBot!</h3>
-            <p className="text-sm text-gray-200">Ask me anything about this website or company.</p>
+            <h3 className="font-semibold text-foreground mb-2">Welcome to InsightBot!</h3>
+            <p className="text-sm text-muted-foreground">Ask me anything about this website or company.</p>
           </div>
         )}
 
         {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
-          >
+          <div key={idx} className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
             {msg.sender === "ai" && (
-              <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 mt-1 shadow-md">
+              <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0 mt-1">
                 <Bot className="w-4 h-4 text-white" />
               </div>
             )}
             <div
-              className={`max-w-[75%] px-4 py-3 rounded-2xl backdrop-blur-md ${
+              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
                 msg.sender === "user"
-                  ? "bg-gradient-to-r from-purple-500/80 to-pink-500/80 text-white shadow-lg rounded-br-md"
-                  : "bg-white/20 text-white border border-white/20 shadow-sm rounded-bl-md"
+                  ? "bg-gradient-primary text-white rounded-br-md"
+                  : "bg-background border shadow-sm rounded-bl-md"
               }`}
             >
               <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
             </div>
             {msg.sender === "user" && (
-              <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center flex-shrink-0 mt-1 shadow">
-                <User className="w-4 h-4 text-white" />
+              <div className="w-8 h-8 bg-muted rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                <User className="w-4 h-4 text-muted-foreground" />
               </div>
             )}
           </div>
@@ -121,11 +139,11 @@ export default function ChatWindow({ onClose }) {
 
         {loading && (
           <div className="flex gap-3">
-            <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0">
+            <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0">
               <Bot className="w-4 h-4 text-white" />
             </div>
-            <div className="bg-white/20 text-white border border-white/20 rounded-2xl px-4 py-3 shadow-sm">
-              <div className="flex items-center gap-2 text-gray-200">
+            <div className="bg-background border shadow-sm rounded-2xl rounded-bl-md px-4 py-3">
+              <div className="flex items-center gap-2 text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 <span className="text-sm">Thinking...</span>
               </div>
@@ -136,26 +154,28 @@ export default function ChatWindow({ onClose }) {
       </CardContent>
 
       {/* Input */}
-      <div className="p-4 border-t border-white/10 bg-white/5 backdrop-blur-lg">
+      <div className="p-4 border-t bg-background">
         <div className="flex gap-2">
           <Input
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type a message..."
-            className="flex-1 bg-white/20 text-white placeholder-gray-300 border-0 rounded-xl focus-visible:ring-1 focus-visible:ring-blue-400"
+            placeholder="Ask me anything..."
+            className="flex-1 bg-muted/50 border-0 focus-visible:ring-1 focus-visible:ring-primary"
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
             disabled={!apiKey || !clientDomain || loading}
           />
           <Button
             onClick={sendMessage}
             disabled={loading || !input.trim() || !apiKey || !clientDomain}
-            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:opacity-90 px-4 text-white rounded-xl shadow-lg"
+            className="bg-gradient-primary hover:opacity-90 px-4"
           >
             <Send className="w-4 h-4" />
           </Button>
         </div>
-        <p className="text-xs text-center mt-2 text-gray-300">✨ Powered by InsightBot AI</p>
+        <div className="flex items-center justify-center mt-2">
+          <p className="text-xs text-muted-foreground">Powered by InsightBot AI</p>
+        </div>
       </div>
     </Card>
   );
