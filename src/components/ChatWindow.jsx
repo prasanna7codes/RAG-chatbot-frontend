@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { X, Loader2, Send, Bot, User } from "lucide-react";
+import { Loader2, Bot, User } from "lucide-react";
 
 export default function ChatWindow() {
   const [apiKey, setApiKey] = useState("");
@@ -12,20 +12,27 @@ export default function ChatWindow() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-
   const [themeColor, setThemeColor] = useState("#4f46e5");
   const [botName, setBotName] = useState("InsightBot");
+  const [sessionId, setSessionId] = useState("");
 
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Initialize sessionId and URL params
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-
     setApiKey(params.get("apiKey") || "");
     setClientDomain(params.get("clientDomain") || "");
     setThemeColor(params.get("themeColor") || "#4f46e5");
     setBotName(params.get("botName") || "InsightBot");
+
+    let session = localStorage.getItem("chat_session_id");
+    if (!session) {
+      session = crypto.randomUUID();
+      localStorage.setItem("chat_session_id", session);
+    }
+    setSessionId(session);
   }, []);
 
   useEffect(() => {
@@ -36,6 +43,7 @@ export default function ChatWindow() {
     inputRef.current?.focus();
   }, []);
 
+  // Send message to backend
   const sendMessage = async () => {
     if (!input.trim() || !apiKey || !clientDomain) return;
 
@@ -50,12 +58,12 @@ export default function ChatWindow() {
           "Content-Type": "application/json",
           "X-API-Key": apiKey,
           "X-Client-Domain": clientDomain,
+          "X-Session-Id": sessionId,
         },
         body: JSON.stringify({ question: input }),
       });
 
       if (!res.ok) throw new Error("Error fetching answer");
-
       const data = await res.json();
       const aiMessage = { sender: "ai", text: data.answer || "Sorry, I could not find an answer." };
       setMessages((prev) => [...prev, aiMessage]);
@@ -66,6 +74,24 @@ export default function ChatWindow() {
     setInput("");
     setLoading(false);
     inputRef.current?.focus();
+  };
+
+  // Visitor feedback
+  const promptFeedback = (botResponse) => {
+    const contact = prompt("Sorry that wasn't helpful! Please leave your email or contact so the client can reach out:");
+    if (contact) {
+      fetch("https://trying-cloud-embedding-again.onrender.com/feedback/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+          "X-Client-Domain": clientDomain,
+          "X-Session-Id": sessionId,
+        },
+        body: JSON.stringify({ botResponse, userContact: contact }),
+      });
+      alert("Thanks! The client will reach out to you soon.");
+    }
   };
 
   return (
@@ -81,7 +107,6 @@ export default function ChatWindow() {
             <p className="text-xs text-white/80">Always here to help</p>
           </div>
         </div>
-        
       </div>
 
       {/* Messages */}
@@ -92,6 +117,7 @@ export default function ChatWindow() {
             <p className="text-sm text-gray-600">Ask me anything about this website or company.</p>
           </div>
         )}
+
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
             {msg.sender === "ai" && (
@@ -101,6 +127,11 @@ export default function ChatWindow() {
             )}
             <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "user" ? "bg-blue-500 text-white rounded-br-md" : "bg-white border rounded-bl-md"}`}>
               <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+
+              {/* Not helpful button */}
+              {msg.sender === "ai" && (
+                <button className="text-xs text-red-500 mt-1" onClick={() => promptFeedback(msg.text)}>Not helpful?</button>
+              )}
             </div>
             {msg.sender === "user" && (
               <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
@@ -109,6 +140,7 @@ export default function ChatWindow() {
             )}
           </div>
         ))}
+
         {loading && (
           <div className="flex gap-3">
             <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
