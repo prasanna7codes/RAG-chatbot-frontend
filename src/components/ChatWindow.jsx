@@ -13,28 +13,25 @@ export default function ChatWindow() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [themeColor, setThemeColor] = useState("#4f46e5");
+  const [botName, setBotName] = useState("InsightBot");
+
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Fetch apiKey & clientDomain from URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const key = params.get("apiKey");
-    const domain = params.get("clientDomain");
 
-    if (key) setApiKey(key);
-    else console.error("Chatbot API Key not found in URL.");
-
-    if (domain) setClientDomain(domain);
-    else console.error("Client Domain not found in URL.");
+    setApiKey(params.get("apiKey") || "");
+    setClientDomain(params.get("clientDomain") || "");
+    setThemeColor(params.get("themeColor") || "#4f46e5");
+    setBotName(params.get("botName") || "InsightBot");
   }, []);
 
-  // Auto-scroll on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // Focus input
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -57,16 +54,13 @@ export default function ChatWindow() {
         body: JSON.stringify({ question: input }),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || `HTTP error! Status: ${res.status}`);
-      }
+      if (!res.ok) throw new Error("Error fetching answer");
 
       const data = await res.json();
       const aiMessage = { sender: "ai", text: data.answer || "Sorry, I could not find an answer." };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
-      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ Error: ${error.message}` }]);
+      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${error.message}` }]);
     }
 
     setInput("");
@@ -74,76 +68,56 @@ export default function ChatWindow() {
     inputRef.current?.focus();
   };
 
-  // Close handler for both desktop and mobile
-  const handleClose = () => {
-    window.parent.postMessage({ type: "closeChatbot" }, "*");
-  };
-
   return (
-    <Card className="w-full h-full flex flex-col bg-background border shadow-elegant overflow-hidden relative">
+    <Card className="w-full h-full flex flex-col overflow-hidden" style={{ background: "white" }}>
       {/* Header */}
-      <div className="flex justify-between items-center p-4 bg-gradient-primary text-white border-b relative">
+      <div className="flex justify-between items-center p-4" style={{ background: themeColor, color: "white" }}>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-            <Bot className="w-4 h-4" />
+          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.3)" }}>
+            <Bot className="w-4 h-4 text-white" />
           </div>
           <div>
-            <h2 className="font-semibold">InsightBot AI</h2>
+            <h2 className="font-semibold">{botName}</h2>
             <p className="text-xs text-white/80">Always here to help</p>
           </div>
         </div>
-
-        {/* Close button */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={handleClose}
-          className="text-white hover:bg-white/20 h-8 w-8"
-        >
+        <Button variant="ghost" size="icon" onClick={() => { if (window.frameElement) window.frameElement.style.display = "none"; }}>
           <X className="w-4 h-4" />
         </Button>
       </div>
 
       {/* Messages */}
-      <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-muted/30">
+      <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-100">
         {messages.length === 0 && (
           <div className="text-center py-8">
-            <div className="w-12 h-12 bg-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
-              <Bot className="w-6 h-6 text-white" />
-            </div>
-            <h3 className="font-semibold text-foreground mb-2">Welcome to InsightBot!</h3>
-            <p className="text-sm text-muted-foreground">Ask me anything about this website or company.</p>
+            <h3 className="font-semibold mb-2">{botName} is ready to help!</h3>
+            <p className="text-sm text-gray-600">Ask me anything about this website or company.</p>
           </div>
         )}
-
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
             {msg.sender === "ai" && (
-              <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
                 <Bot className="w-4 h-4 text-white" />
               </div>
             )}
-            <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "user" ? "bg-gradient-primary text-white rounded-br-md" : "bg-background border shadow-sm rounded-bl-md"}`}>
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+            <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "user" ? "bg-blue-500 text-white rounded-br-md" : "bg-white border rounded-bl-md"}`}>
+              <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
             </div>
             {msg.sender === "user" && (
-              <div className="w-8 h-8 bg-muted rounded-full flex items-center justify-center flex-shrink-0 mt-1">
-                <User className="w-4 h-4 text-muted-foreground" />
+              <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                <User className="w-4 h-4 text-gray-700" />
               </div>
             )}
           </div>
         ))}
-
         {loading && (
           <div className="flex gap-3">
-            <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0">
+            <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
               <Bot className="w-4 h-4 text-white" />
             </div>
-            <div className="bg-background border shadow-sm rounded-2xl rounded-bl-md px-4 py-3">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-sm">Thinking...</span>
-              </div>
+            <div className="bg-white border rounded-2xl px-4 py-3">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" /> Thinking...
             </div>
           </div>
         )}
@@ -151,28 +125,9 @@ export default function ChatWindow() {
       </CardContent>
 
       {/* Input */}
-      <div className="p-4 border-t bg-background">
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask me anything..."
-            className="flex-1 bg-muted/50 border-0 focus-visible:ring-1 focus-visible:ring-primary"
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
-            disabled={!apiKey || !clientDomain || loading}
-          />
-          <Button
-            onClick={sendMessage}
-            disabled={loading || !input.trim() || !apiKey || !clientDomain}
-            className="bg-gradient-primary hover:opacity-90 px-4"
-          >
-            <Send className="w-4 h-4" />
-          </Button>
-        </div>
-        <div className="flex items-center justify-center mt-2">
-          <p className="text-xs text-muted-foreground">Powered by InsightBot AI</p>
-        </div>
+      <div className="p-4 border-t flex gap-2">
+        <Input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask me anything..." onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()} />
+        <Button onClick={sendMessage} disabled={!input.trim()}>Send</Button>
       </div>
     </Card>
   );
