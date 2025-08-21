@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { X, Loader2, Send, Bot, User } from "lucide-react";
 
-export default function ChatWindow({ onClose }) {
+export default function ChatWindow() {
   const [apiKey, setApiKey] = useState("");
   const [clientDomain, setClientDomain] = useState("");
   const [messages, setMessages] = useState([]);
@@ -16,6 +16,7 @@ export default function ChatWindow({ onClose }) {
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Fetch apiKey & clientDomain from URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const key = params.get("apiKey");
@@ -28,10 +29,12 @@ export default function ChatWindow({ onClose }) {
     else console.error("Client Domain not found in URL.");
   }, []);
 
+  // Auto-scroll on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // Focus input
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -51,9 +54,7 @@ export default function ChatWindow({ onClose }) {
           "X-API-Key": apiKey,
           "X-Client-Domain": clientDomain,
         },
-        body: JSON.stringify({
-          question: input,
-        }),
+        body: JSON.stringify({ question: input }),
       });
 
       if (!res.ok) {
@@ -65,10 +66,7 @@ export default function ChatWindow({ onClose }) {
       const aiMessage = { sender: "ai", text: data.answer || "Sorry, I could not find an answer." };
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        { sender: "ai", text: `⚠️ Error: ${error.message}` },
-      ]);
+      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ Error: ${error.message}` }]);
     }
 
     setInput("");
@@ -76,10 +74,17 @@ export default function ChatWindow({ onClose }) {
     inputRef.current?.focus();
   };
 
+  // Mobile-friendly close button
+  const handleMobileClose = () => {
+    if (window.frameElement) window.frameElement.style.display = "none";
+  };
+
+  const isMobile = window.innerWidth <= 600;
+
   return (
-    <Card className="w-full h-full flex flex-col bg-background border shadow-elegant overflow-hidden">
+    <Card className="w-full h-full flex flex-col bg-background border shadow-elegant overflow-hidden relative">
       {/* Header */}
-      <div className="flex justify-between items-center p-4 bg-gradient-primary text-white border-b">
+      <div className="flex justify-between items-center p-4 bg-gradient-primary text-white border-b relative">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
             <Bot className="w-4 h-4" />
@@ -89,15 +94,42 @@ export default function ChatWindow({ onClose }) {
             <p className="text-xs text-white/80">Always here to help</p>
           </div>
         </div>
-        {onClose && (
+
+        {/* Desktop close button */}
+        {!isMobile && (
           <Button
             variant="ghost"
             size="icon"
-            onClick={onClose}
+            onClick={() => {
+              if (window.frameElement) window.frameElement.style.display = "none";
+            }}
             className="text-white hover:bg-white/20 h-8 w-8"
           >
             <X className="w-4 h-4" />
           </Button>
+        )}
+
+        {/* Mobile close button */}
+        {isMobile && (
+          <button
+            onClick={handleMobileClose}
+            style={{
+              position: "absolute",
+              top: "8px",
+              right: "8px",
+              background: "rgba(0,0,0,0.2)",
+              border: "none",
+              borderRadius: "50%",
+              width: "32px",
+              height: "32px",
+              color: "white",
+              cursor: "pointer",
+              fontSize: "18px",
+              zIndex: 10,
+            }}
+          >
+            ✕
+          </button>
         )}
       </div>
 
@@ -114,7 +146,10 @@ export default function ChatWindow({ onClose }) {
         )}
 
         {messages.map((msg, idx) => (
-          <div key={idx} className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
+          <div
+            key={idx}
+            className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
+          >
             {msg.sender === "ai" && (
               <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0 mt-1">
                 <Bot className="w-4 h-4 text-white" />
