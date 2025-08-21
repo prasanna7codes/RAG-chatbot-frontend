@@ -74,12 +74,10 @@ export default function ChatWindow() {
     inputRef.current?.focus();
   };
 
-  // Mobile-friendly close button
-  const handleMobileClose = () => {
-    if (window.frameElement) window.frameElement.style.display = "none";
+  // Close handler for both desktop and mobile
+  const handleClose = () => {
+    window.parent.postMessage({ type: "closeChatbot" }, "*");
   };
-
-  const isMobile = window.innerWidth <= 600;
 
   return (
     <Card className="w-full h-full flex flex-col bg-background border shadow-elegant overflow-hidden relative">
@@ -95,42 +93,15 @@ export default function ChatWindow() {
           </div>
         </div>
 
-        {/* Desktop close button */}
-        {!isMobile && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              if (window.frameElement) window.frameElement.style.display = "none";
-            }}
-            className="text-white hover:bg-white/20 h-8 w-8"
-          >
-            <X className="w-4 h-4" />
-          </Button>
-        )}
-
-        {/* Mobile close button */}
-        {isMobile && (
-          <button
-            onClick={handleMobileClose}
-            style={{
-              position: "absolute",
-              top: "8px",
-              right: "8px",
-              background: "rgba(0,0,0,0.2)",
-              border: "none",
-              borderRadius: "50%",
-              width: "32px",
-              height: "32px",
-              color: "white",
-              cursor: "pointer",
-              fontSize: "18px",
-              zIndex: 10,
-            }}
-          >
-            ✕
-          </button>
-        )}
+        {/* Close button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleClose}
+          className="text-white hover:bg-white/20 h-8 w-8"
+        >
+          <X className="w-4 h-4" />
+        </Button>
       </div>
 
       {/* Messages */}
@@ -146,22 +117,13 @@ export default function ChatWindow() {
         )}
 
         {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
-          >
+          <div key={idx} className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
             {msg.sender === "ai" && (
               <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0 mt-1">
                 <Bot className="w-4 h-4 text-white" />
               </div>
             )}
-            <div
-              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
-                msg.sender === "user"
-                  ? "bg-gradient-primary text-white rounded-br-md"
-                  : "bg-background border shadow-sm rounded-bl-md"
-              }`}
-            >
+            <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "user" ? "bg-gradient-primary text-white rounded-br-md" : "bg-background border shadow-sm rounded-bl-md"}`}>
               <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
             </div>
             {msg.sender === "user" && (
