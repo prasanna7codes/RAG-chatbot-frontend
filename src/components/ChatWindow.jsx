@@ -81,9 +81,7 @@ export default function ChatWindow() {
             <p className="text-xs text-white/80">Always here to help</p>
           </div>
         </div>
-        <Button variant="ghost" size="icon" onClick={() => { if (window.frameElement) window.frameElement.style.display = "none"; }}>
-          <X className="w-4 h-4" />
-        </Button>
+        
       </div>
 
       {/* Messages */}
