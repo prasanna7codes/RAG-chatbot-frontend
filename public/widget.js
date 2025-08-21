@@ -18,6 +18,10 @@
   const iframeBottom = scriptTag.getAttribute("data-iframe-bottom") || "90px";
   const iframeRight = scriptTag.getAttribute("data-iframe-right") || "20px";
 
+  // Generate a unique session ID for each visitor
+  const sessionId = 'sess-' + Math.random().toString(36).substring(2, 15) +
+                    Math.random().toString(36).substring(2, 15);
+
   // Create iframe
   const iframe = document.createElement("iframe");
   iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}&clientDomain=${encodeURIComponent(clientDomain)}&themeColor=${encodeURIComponent(themeColor)}&botName=${encodeURIComponent(botName)}`;
@@ -68,4 +72,17 @@
   };
 
   document.body.appendChild(button);
+
+  // Pass session ID to iframe when requested
+  window.addEventListener('message', (event) => {
+    if (event.data === 'get-session-id') {
+      event.source.postMessage({ sessionId }, event.origin);
+    }
+  });
+
+  // Send session ID immediately on iframe load
+  iframe.onload = () => {
+    iframe.contentWindow.postMessage({ sessionId }, '*');
+  };
+
 })();
