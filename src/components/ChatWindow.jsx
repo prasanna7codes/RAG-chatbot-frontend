@@ -20,19 +20,17 @@ export default function ChatWindow() {
   const inputRef = useRef(null);
 
   // Initialize sessionId and URL params
-  useEffect(() => {
+   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setApiKey(params.get("apiKey") || "");
     setClientDomain(params.get("clientDomain") || "");
     setThemeColor(params.get("themeColor") || "#4f46e5");
     setBotName(params.get("botName") || "InsightBot");
 
-    let session = localStorage.getItem("chat_session_id");
-    if (!session) {
-      session = crypto.randomUUID();
-      localStorage.setItem("chat_session_id", session);
-    }
-    setSessionId(session);
+    // MODIFIED PART: Always generate a new session ID on component mount
+    const newSessionId = crypto.randomUUID();
+    setSessionId(newSessionId);
+
   }, []);
 
   useEffect(() => {
