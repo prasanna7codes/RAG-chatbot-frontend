@@ -36,7 +36,6 @@ export default function ChatWindow() {
     setClientDomain(params.get("clientDomain") || "");
     setThemeColor(params.get("themeColor") || "#4f46e5");
     setBotName(params.get("botName") || "InsightBot");
-
     setSessionId(crypto.randomUUID());
 
     return () => {
@@ -108,7 +107,7 @@ export default function ChatWindow() {
 
       setConversationId(data.conversation_id);
 
-      // Scoped supabase client for visitor
+      // Scoped supabase client for visitor (PostgREST uses Authorization header)
       const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: { persistSession: false, detectSessionInUrl: false },
         global: { headers: { Authorization: `Bearer ${data.supabase_jwt}` } },
@@ -116,17 +115,8 @@ export default function ChatWindow() {
       });
       supaRef.current = supa;
 
-      // Make websocket use this JWT
-      const { error: sessErr } = await supa.auth.setSession({
-        access_token: data.supabase_jwt,
-        refresh_token: data.supabase_jwt, // dummy
-      });
-      if (sessErr) {
-        console.error("setSession error", sessErr);
-        setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Live session auth failed." }]);
-        setLoading(false);
-        return;
-      }
+      // IMPORTANT: tell the Realtime socket to use our custom JWT
+      supa.realtime.setAuth(data.supabase_jwt);
 
       // Subscribe to exec messages for this conversation
       const ch = supa
@@ -142,10 +132,8 @@ export default function ChatWindow() {
           (payload) => {
             const row = payload.new;
             if (!row) return;
-
             // ignore visitor echoes (we append optimistically)
             if (row.sender_type !== "executive") return;
-
             setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
           }
         )
@@ -169,6 +157,7 @@ export default function ChatWindow() {
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setInput("");
 
+    // INSERT via PostgREST with our Authorization header
     const { error } = await supaRef.current.from("live_messages").insert({
       conversation_id: conversationId,
       sender_type: "visitor",
