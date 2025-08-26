@@ -20,10 +20,9 @@ export default function ChatWindow() {
   const [botName, setBotName] = useState("InsightBot");
   const [sessionId, setSessionId] = useState("");
 
-  // live chat state
+  // live chat
   const [liveMode, setLiveMode] = useState(false);
   const [conversationId, setConversationId] = useState(null);
-  const [supabaseJwt, setSupabaseJwt] = useState(null);
 
   // refs
   const supaRef = useRef(null);
@@ -38,15 +37,18 @@ export default function ChatWindow() {
     setThemeColor(params.get("themeColor") || "#4f46e5");
     setBotName(params.get("botName") || "InsightBot");
 
-    // always new session on mount
-    const newSessionId = crypto.randomUUID();
-    setSessionId(newSessionId);
+    setSessionId(crypto.randomUUID());
 
     return () => {
-      // cleanup realtime channel on unmount
-      try {
-        channelRef.current?.unsubscribe();
-      } catch {}
+      (async () => {
+        try {
+          if (channelRef.current && supaRef.current) {
+            await channelRef.current.unsubscribe();
+            supaRef.current.removeChannel(channelRef.current);
+            channelRef.current = null;
+          }
+        } catch {}
+      })();
     };
   }, []);
 
@@ -58,7 +60,7 @@ export default function ChatWindow() {
     inputRef.current?.focus();
   }, []);
 
-  // ===== RAG message flow (bot) =====
+  // ===== RAG flow =====
   const sendBotMessage = async () => {
     if (!input.trim() || !apiKey || !clientDomain) return;
     const text = input.trim();
@@ -103,10 +105,10 @@ export default function ChatWindow() {
       });
       if (!res.ok) throw new Error("Unable to start live chat");
       const data = await res.json();
-      setConversationId(data.conversation_id);
-      setSupabaseJwt(data.supabase_jwt);
 
-      // scoped supabase client
+      setConversationId(data.conversation_id);
+
+      // Scoped supabase client for visitor
       const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: { persistSession: false, detectSessionInUrl: false },
         global: { headers: { Authorization: `Bearer ${data.supabase_jwt}` } },
@@ -114,13 +116,19 @@ export default function ChatWindow() {
       });
       supaRef.current = supa;
 
-      // IMPORTANT: make Realtime websocket use this JWT
-      await supa.auth.setSession({
+      // Make websocket use this JWT
+      const { error: sessErr } = await supa.auth.setSession({
         access_token: data.supabase_jwt,
-        refresh_token: data.supabase_jwt, // dummy; API requires field
+        refresh_token: data.supabase_jwt, // dummy
       });
+      if (sessErr) {
+        console.error("setSession error", sessErr);
+        setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Live session auth failed." }]);
+        setLoading(false);
+        return;
+      }
 
-      // Subscribe to conversation messages (INSERT only)
+      // Subscribe to exec messages for this conversation
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
         .on(
@@ -134,23 +142,18 @@ export default function ChatWindow() {
           (payload) => {
             const row = payload.new;
             if (!row) return;
-            const fromExec = row.sender_type === "executive";
-            setMessages((prev) => [
-              ...prev,
-              { sender: fromExec ? "ai" : "user", text: row.message },
-            ]);
+
+            // ignore visitor echoes (we append optimistically)
+            if (row.sender_type !== "executive") return;
+
+            setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
           }
         )
-        .subscribe((status) => {
-          // console.log("realtime status", status);
-        });
+        .subscribe();
 
       channelRef.current = ch;
       setLiveMode(true);
-      setMessages((prev) => [
-        ...prev,
-        { sender: "ai", text: "Connecting you to a human agent..." },
-      ]);
+      setMessages((prev) => [...prev, { sender: "ai", text: "Connecting you to a human agent..." }]);
     } catch (e) {
       setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
     } finally {
@@ -162,37 +165,17 @@ export default function ChatWindow() {
     if (!input.trim() || !supaRef.current || !conversationId) return;
     const text = input.trim();
 
-    // optimistic
+    // optimistic append
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setInput("");
 
-    // insert via RLS-scoped JWT
     const { error } = await supaRef.current.from("live_messages").insert({
       conversation_id: conversationId,
       sender_type: "visitor",
       message: text,
     });
     if (error) {
-      // roll back optimistic append with an error bubble
       setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${error.message}` }]);
-    }
-  };
-
-  // Visitor feedback (preexisting)
-  const promptFeedback = (botResponse) => {
-    const contact = prompt("Sorry that wasn't helpful! Please leave your email or contact so the client can reach out:");
-    if (contact) {
-      fetch("https://trying-cloud-embedding-again.onrender.com/feedback/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-          "X-Client-Domain": clientDomain,
-          "X-Session-Id": sessionId,
-        },
-        body: JSON.stringify({ botResponse, userContact: contact }),
-      });
-      alert("Thanks! The client will reach out to you soon.");
     }
   };
 
@@ -239,9 +222,6 @@ export default function ChatWindow() {
             )}
             <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "user" ? "bg-blue-500 text-white rounded-br-md" : "bg-white border rounded-bl-md"}`}>
               <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-              {!liveMode && msg.sender === "ai" && (
-                <button className="text-xs text-red-500 mt-1" onClick={() => promptFeedback(msg.text)}>Not helpful?</button>
-              )}
             </div>
             {msg.sender === "user" && (
               <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
