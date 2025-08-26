@@ -46,7 +46,9 @@ export default function ChatWindow() {
             supaRef.current.removeChannel(channelRef.current);
             channelRef.current = null;
           }
-        } catch {}
+        } catch (e) {
+          // no-op
+        }
       })();
     };
   }, []);
@@ -105,9 +107,17 @@ export default function ChatWindow() {
       if (!res.ok) throw new Error("Unable to start live chat");
       const data = await res.json();
 
+      // 1) Inspect the token in-browser
+      try {
+        const payload = JSON.parse(atob(data.supabase_jwt.split(".")[1]));
+        console.log("VISITOR JWT payload (widget):", payload);
+      } catch (e) {
+        console.warn("Failed to decode visitor JWT in browser:", e);
+      }
+
       setConversationId(data.conversation_id);
 
-      // Scoped supabase client for visitor (PostgREST uses Authorization header)
+      // 2) Scoped supabase client for visitor (REST uses Authorization header)
       const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: { persistSession: false, detectSessionInUrl: false },
         global: { headers: { Authorization: `Bearer ${data.supabase_jwt}` } },
@@ -115,12 +125,39 @@ export default function ChatWindow() {
       });
       supaRef.current = supa;
 
-      // IMPORTANT: tell the Realtime socket to use our custom JWT
+      // 3) Realtime must use the same JWT BEFORE subscribing
       supa.realtime.setAuth(data.supabase_jwt);
 
-      // Subscribe to exec messages for this conversation
+      // 4) Initial history fetch (so visitor sees any prior exec message)
+      try {
+        const { data: history, error: histErr } = await supa
+          .from("live_messages")
+          .select("*")
+          .eq("conversation_id", data.conversation_id)
+          .order("created_at", { ascending: true });
+        if (histErr) console.warn("Initial history fetch failed:", histErr);
+        if (history?.length) {
+          const mapped = history
+            .filter((r) => r.sender_type === "executive")
+            .map((r) => ({ sender: "ai", text: r.message }));
+          if (mapped.length) setMessages((prev) => [...prev, ...mapped]);
+        }
+      } catch (e) {
+        console.warn("History fetch exception:", e);
+      }
+
+      // 5) Subscribe to exec messages for this conversation
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
+        .on("system", { event: "SUBSCRIBED" }, (s) => {
+          console.log("Realtime channel SUBSCRIBED:", s);
+        })
+        .on("system", { event: "CLOSED" }, (s) => {
+          console.log("Realtime channel CLOSED:", s);
+        })
+        .on("broadcast", { event: "error" }, (e) => {
+          console.warn("Realtime broadcast error:", e);
+        })
         .on(
           "postgres_changes",
           {
@@ -130,10 +167,10 @@ export default function ChatWindow() {
             filter: `conversation_id=eq.${data.conversation_id}`,
           },
           (payload) => {
+            console.log("RT payload:", payload);
             const row = payload.new;
             if (!row) return;
-            // ignore visitor echoes (we append optimistically)
-            if (row.sender_type !== "executive") return;
+            if (row.sender_type !== "executive") return; // ignore echoes
             setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
           }
         )
@@ -158,11 +195,16 @@ export default function ChatWindow() {
     setInput("");
 
     // INSERT via PostgREST with our Authorization header
-    const { error } = await supaRef.current.from("live_messages").insert({
-      conversation_id: conversationId,
-      sender_type: "visitor",
-      message: text,
-    });
+    const { data: ins, error } = await supaRef.current
+      .from("live_messages")
+      .insert({
+        conversation_id: conversationId,
+        sender_type: "visitor",
+        message: text,
+      })
+      .select("*");
+
+    console.log("visitor insert result:", { ins, error });
     if (error) {
       setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${error.message}` }]);
     }
