@@ -24,9 +24,10 @@ export default function ChatWindow() {
   const [liveMode, setLiveMode] = useState(false);
   const [conversationId, setConversationId] = useState(null);
   const [supabaseJwt, setSupabaseJwt] = useState(null);
+
+  // refs
   const supaRef = useRef(null);
   const channelRef = useRef(null);
-
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -36,8 +37,17 @@ export default function ChatWindow() {
     setClientDomain(params.get("clientDomain") || "");
     setThemeColor(params.get("themeColor") || "#4f46e5");
     setBotName(params.get("botName") || "InsightBot");
+
+    // always new session on mount
     const newSessionId = crypto.randomUUID();
     setSessionId(newSessionId);
+
+    return () => {
+      // cleanup realtime channel on unmount
+      try {
+        channelRef.current?.unsubscribe();
+      } catch {}
+    };
   }, []);
 
   useEffect(() => {
@@ -96,7 +106,7 @@ export default function ChatWindow() {
       setConversationId(data.conversation_id);
       setSupabaseJwt(data.supabase_jwt);
 
-      // create scoped supabase client
+      // scoped supabase client
       const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: { persistSession: false, detectSessionInUrl: false },
         global: { headers: { Authorization: `Bearer ${data.supabase_jwt}` } },
@@ -104,12 +114,23 @@ export default function ChatWindow() {
       });
       supaRef.current = supa;
 
-      // Subscribe to messages for this conversation
+      // IMPORTANT: make Realtime websocket use this JWT
+      await supa.auth.setSession({
+        access_token: data.supabase_jwt,
+        refresh_token: data.supabase_jwt, // dummy; API requires field
+      });
+
+      // Subscribe to conversation messages (INSERT only)
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "live_messages", filter: `conversation_id=eq.${data.conversation_id}` },
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "live_messages",
+            filter: `conversation_id=eq.${data.conversation_id}`,
+          },
           (payload) => {
             const row = payload.new;
             if (!row) return;
@@ -121,12 +142,15 @@ export default function ChatWindow() {
           }
         )
         .subscribe((status) => {
-          // Optionally show "waiting for executive..."
+          // console.log("realtime status", status);
         });
-      channelRef.current = ch;
 
+      channelRef.current = ch;
       setLiveMode(true);
-      setMessages((prev) => [...prev, { sender: "ai", text: "Connecting you to a human agent..." }]);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: "Connecting you to a human agent..." },
+      ]);
     } catch (e) {
       setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
     } finally {
@@ -137,17 +161,24 @@ export default function ChatWindow() {
   const sendLiveMessage = async () => {
     if (!input.trim() || !supaRef.current || !conversationId) return;
     const text = input.trim();
+
+    // optimistic
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setInput("");
+
     // insert via RLS-scoped JWT
-    await supaRef.current.from("live_messages").insert({
+    const { error } = await supaRef.current.from("live_messages").insert({
       conversation_id: conversationId,
       sender_type: "visitor",
       message: text,
     });
+    if (error) {
+      // roll back optimistic append with an error bubble
+      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${error.message}` }]);
+    }
   };
 
-  // Visitor feedback (kept as-is)
+  // Visitor feedback (preexisting)
   const promptFeedback = (botResponse) => {
     const contact = prompt("Sorry that wasn't helpful! Please leave your email or contact so the client can reach out:");
     if (contact) {
