@@ -86,77 +86,110 @@ export default function ChatWindow() {
     }
   };
 
-  // ===== voice recording (STT Whisper) =====
-  const toggleRecording = async () => {
-    if (isRecording) {
-      // Stop recording
-      mediaRecorderRef.current?.stop();
-      streamRef.current?.getTracks().forEach((t) => t.stop()); // cleanup
-      setIsRecording(false);
-      return;
+
+  // ===== voice recording (STT Whisper) with device logging =====
+const toggleRecording = async () => {
+  if (isRecording) {
+    // Stop recording
+    mediaRecorderRef.current?.stop();
+    streamRef.current?.getTracks().forEach((t) => t.stop()); // cleanup
+    setIsRecording(false);
+    return;
+  }
+
+  try {
+    console.log("🎙️ Requesting microphone access...");
+
+    // 🔍 List available media devices
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    console.log("🔊 Available devices:", devices);
+    const mics = devices.filter((d) => d.kind === "audioinput");
+    if (mics.length === 0) {
+      console.warn("⚠️ No microphones detected!");
+    } else {
+      console.log("🎤 Detected microphones:", mics.map((m) => m.label || "Unnamed mic"));
     }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+    // ✅ Request mic stream
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
 
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
+    // Pick supported MIME type
+    let options = { mimeType: "audio/webm;codecs=opus" };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      options = { mimeType: "audio/webm" };
+    }
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      options = {}; // fallback
+    }
 
-      mediaRecorder.onstart = () => {
-        console.log("🎙️ Recording started");
-        setIsRecording(true);
-      };
+    const mediaRecorder = new MediaRecorder(stream, options);
+    mediaRecorderRef.current = mediaRecorder;
+    audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
+    mediaRecorder.onstart = () => {
+      console.log("✅ Recording started with MIME:", mediaRecorder.mimeType);
+      setIsRecording(true);
+    };
 
-      mediaRecorder.onstop = async () => {
-        console.log("🛑 Recording stopped");
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        audioChunksRef.current.push(e.data);
+      }
+    };
 
-        const formData = new FormData();
-        formData.append("file", blob, "recording.webm");
+    mediaRecorder.onstop = async () => {
+      console.log("🛑 Recording stopped");
+      const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
 
-        try {
-          const res = await fetch(
-            "https://trying-cloud-embedding-again.onrender.com/stt",
-            { method: "POST", body: formData }
-          );
-          const data = await res.json();
-          console.log("STT response:", data);
+      const formData = new FormData();
+      formData.append("file", blob, "recording.webm");
 
-          if (data.text) {
-            setInput(data.text); // fill input box with transcript
-            setLastWasVoice(true); // mark as voice input
-          } else {
-            setMessages((prev) => [
-              ...prev,
-              { sender: "ai", text: "⚠️ Could not transcribe audio." },
-            ]);
-          }
-        } catch (err) {
-          console.error("STT error:", err);
+      try {
+        const res = await fetch(
+          "https://trying-cloud-embedding-again.onrender.com/stt",
+          { method: "POST", body: formData }
+        );
+        const data = await res.json();
+        console.log("STT response:", data);
+
+        if (data.text) {
+          setInput(data.text);
+          setLastWasVoice(true);
+        } else {
           setMessages((prev) => [
             ...prev,
-            { sender: "ai", text: "⚠️ Error sending audio to server." },
+            { sender: "ai", text: "⚠️ Could not transcribe audio." },
           ]);
         }
-      };
+      } catch (err) {
+        console.error("❌ STT error:", err);
+        setMessages((prev) => [
+          ...prev,
+          { sender: "ai", text: "⚠️ Error sending audio to server." },
+        ]);
+      }
+    };
 
-      mediaRecorder.start();
-    } catch (err) {
-      console.error("Mic error:", err);
-      setMessages((prev) => [
-        ...prev,
-        { sender: "ai", text: "⚠️ Microphone access denied or unavailable." },
-      ]);
+    mediaRecorder.start();
+  } catch (err) {
+    console.error("❌ getUserMedia failed:", err);
+
+    let errorMsg = "⚠️ Microphone access denied or unavailable.";
+    if (err.name === "NotAllowedError") {
+      errorMsg = "⚠️ Permission denied. Please allow microphone access.";
+    } else if (err.name === "NotFoundError") {
+      errorMsg = "⚠️ No microphone found. Please connect one.";
+    } else if (err.name === "NotReadableError") {
+      errorMsg = "⚠️ Microphone is in use by another app.";
+    } else if (err.name === "SecurityError") {
+      errorMsg = "⚠️ Access blocked due to insecure context (use HTTPS or localhost).";
     }
-  };
+
+    setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
+  }
+};
+
 
   // ===== RAG flow =====
   const sendBotMessage = async () => {
