@@ -33,6 +33,8 @@ export default function ChatWindow() {
   // voice
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const streamRef = useRef(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -82,41 +84,73 @@ export default function ChatWindow() {
   };
 
   // ===== voice recording (STT Whisper) =====
-  const startRecording = async () => {
+  const toggleRecording = async () => {
+    if (isRecording) {
+      // Stop recording
+      mediaRecorderRef.current?.stop();
+      streamRef.current?.getTracks().forEach((t) => t.stop()); // cleanup
+      setIsRecording(false);
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
-      const chunks = [];
+      audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+      mediaRecorder.onstart = () => {
+        console.log("🎙️ Recording started");
+        setIsRecording(true);
+      };
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
       mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: "audio/webm" });
+        console.log("🛑 Recording stopped");
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+
         const formData = new FormData();
         formData.append("file", blob, "recording.webm");
 
-        const res = await fetch(
-          "https://trying-cloud-embedding-again.onrender.com/stt",
-          {
-            method: "POST",
-            body: formData,
+        try {
+          const res = await fetch(
+            "https://trying-cloud-embedding-again.onrender.com/stt",
+            { method: "POST", body: formData }
+          );
+          const data = await res.json();
+          console.log("STT response:", data);
+
+          if (data.text) {
+            setInput(data.text); // fill input box with transcript
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { sender: "ai", text: "⚠️ Could not transcribe audio." },
+            ]);
           }
-        );
-        const data = await res.json();
-        if (data.text) {
-          setInput(data.text); // fill input box
+        } catch (err) {
+          console.error("STT error:", err);
+          setMessages((prev) => [
+            ...prev,
+            { sender: "ai", text: "⚠️ Error sending audio to server." },
+          ]);
         }
       };
 
       mediaRecorder.start();
-      setIsRecording(true);
-
-      setTimeout(() => {
-        mediaRecorder.stop();
-        setIsRecording(false);
-      }, 5000); // auto stop after 5s
     } catch (err) {
       console.error("Mic error:", err);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: "⚠️ Microphone access denied or unavailable." },
+      ]);
     }
   };
 
@@ -220,17 +254,21 @@ export default function ChatWindow() {
       // realtime subscribe
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
-        .on("postgres_changes", {
-          event: "INSERT",
-          schema: "public",
-          table: "live_messages",
-          filter: `conversation_id=eq.${data.conversation_id}`,
-        }, (payload) => {
-          const row = payload.new;
-          if (!row) return;
-          if (row.sender_type !== "executive") return;
-          setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
-        })
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "live_messages",
+            filter: `conversation_id=eq.${data.conversation_id}`,
+          },
+          (payload) => {
+            const row = payload.new;
+            if (!row) return;
+            if (row.sender_type !== "executive") return;
+            setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
+          }
+        )
         .subscribe();
 
       channelRef.current = ch;
@@ -381,8 +419,8 @@ export default function ChatWindow() {
         <Button onClick={onSend} disabled={!input.trim()}>
           {liveMode ? "Send" : "Ask"}
         </Button>
-        <Button onClick={startRecording} variant="outline">
-          {isRecording ? "🎙️ Recording..." : <Mic className="w-4 h-4" />}
+        <Button onClick={toggleRecording} variant="outline">
+          {isRecording ? "🛑 Stop Recording" : <Mic className="w-4 h-4" />}
         </Button>
       </div>
     </Card>
