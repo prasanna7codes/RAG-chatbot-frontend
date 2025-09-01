@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Loader2, Bot, User, PhoneCall } from "lucide-react";
+import { Loader2, Bot, User, PhoneCall, Mic } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -29,6 +29,10 @@ export default function ChatWindow() {
   const channelRef = useRef(null);
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // voice
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -61,6 +65,61 @@ export default function ChatWindow() {
     inputRef.current?.focus();
   }, []);
 
+  // ===== helper: play bot reply with ElevenLabs TTS =====
+  const playTTS = async (text) => {
+    try {
+      const res = await fetch(
+        "https://trying-cloud-embedding-again.onrender.com/tts?text=" +
+          encodeURIComponent(text)
+      );
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.play();
+    } catch (e) {
+      console.error("TTS error:", e);
+    }
+  };
+
+  // ===== voice recording (STT Whisper) =====
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      const chunks = [];
+
+      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        const formData = new FormData();
+        formData.append("file", blob, "recording.webm");
+
+        const res = await fetch(
+          "https://trying-cloud-embedding-again.onrender.com/stt",
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+        const data = await res.json();
+        if (data.text) {
+          setInput(data.text); // fill input box
+        }
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+
+      setTimeout(() => {
+        mediaRecorder.stop();
+        setIsRecording(false);
+      }, 5000); // auto stop after 5s
+    } catch (err) {
+      console.error("Mic error:", err);
+    }
+  };
+
   // ===== RAG flow =====
   const sendBotMessage = async () => {
     if (!input.trim() || !apiKey || !clientDomain) return;
@@ -68,22 +127,34 @@ export default function ChatWindow() {
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setLoading(true);
     try {
-      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-          "X-Client-Domain": clientDomain,
-          "X-Session-Id": sessionId,
-        },
-        body: JSON.stringify({ question: text }),
-      });
+      const res = await fetch(
+        "https://trying-cloud-embedding-again.onrender.com/query/",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": apiKey,
+            "X-Client-Domain": clientDomain,
+            "X-Session-Id": sessionId,
+          },
+          body: JSON.stringify({ question: text }),
+        }
+      );
       if (!res.ok) throw new Error("Error fetching answer");
       const data = await res.json();
-      const aiMessage = { sender: "ai", text: data.answer || "Sorry, I could not find an answer." };
+      const aiMessage = {
+        sender: "ai",
+        text: data.answer || "Sorry, I could not find an answer.",
+      };
       setMessages((prev) => [...prev, aiMessage]);
+
+      // auto-play answer
+      playTTS(aiMessage.text);
     } catch (e) {
-      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: `⚠️ ${e.message}` },
+      ]);
     }
     setInput("");
     setLoading(false);
@@ -94,20 +165,23 @@ export default function ChatWindow() {
   const startHumanHandoff = async () => {
     try {
       setLoading(true);
-      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/live/request", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-          "X-Client-Domain": clientDomain,
-          "X-Session-Id": sessionId,
-        },
-        body: JSON.stringify({ requested_by_contact: null }),
-      });
+      const res = await fetch(
+        "https://trying-cloud-embedding-again.onrender.com/live/request",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": apiKey,
+            "X-Client-Domain": clientDomain,
+            "X-Session-Id": sessionId,
+          },
+          body: JSON.stringify({ requested_by_contact: null }),
+        }
+      );
       if (!res.ok) throw new Error("Unable to start live chat");
       const data = await res.json();
 
-      // 1) Inspect the token in-browser
+      // debug JWT
       try {
         const payload = JSON.parse(atob(data.supabase_jwt.split(".")[1]));
         console.log("VISITOR JWT payload (widget):", payload);
@@ -117,18 +191,15 @@ export default function ChatWindow() {
 
       setConversationId(data.conversation_id);
 
-      // 2) Scoped supabase client for visitor (REST uses Authorization header)
       const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: { persistSession: false, detectSessionInUrl: false },
         global: { headers: { Authorization: `Bearer ${data.supabase_jwt}` } },
         realtime: { params: { eventsPerSecond: 20 } },
       });
       supaRef.current = supa;
-
-      // 3) Realtime must use the same JWT BEFORE subscribing
       supa.realtime.setAuth(data.supabase_jwt);
 
-      // 4) Initial history fetch (so visitor sees any prior exec message)
+      // initial history
       try {
         const { data: history, error: histErr } = await supa
           .from("live_messages")
@@ -146,41 +217,33 @@ export default function ChatWindow() {
         console.warn("History fetch exception:", e);
       }
 
-      // 5) Subscribe to exec messages for this conversation
+      // realtime subscribe
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
-        .on("system", { event: "SUBSCRIBED" }, (s) => {
-          console.log("Realtime channel SUBSCRIBED:", s);
+        .on("postgres_changes", {
+          event: "INSERT",
+          schema: "public",
+          table: "live_messages",
+          filter: `conversation_id=eq.${data.conversation_id}`,
+        }, (payload) => {
+          const row = payload.new;
+          if (!row) return;
+          if (row.sender_type !== "executive") return;
+          setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
         })
-        .on("system", { event: "CLOSED" }, (s) => {
-          console.log("Realtime channel CLOSED:", s);
-        })
-        .on("broadcast", { event: "error" }, (e) => {
-          console.warn("Realtime broadcast error:", e);
-        })
-        .on(
-          "postgres_changes",
-          {
-            event: "INSERT",
-            schema: "public",
-            table: "live_messages",
-            filter: `conversation_id=eq.${data.conversation_id}`,
-          },
-          (payload) => {
-            console.log("RT payload:", payload);
-            const row = payload.new;
-            if (!row) return;
-            if (row.sender_type !== "executive") return; // ignore echoes
-            setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
-          }
-        )
         .subscribe();
 
       channelRef.current = ch;
       setLiveMode(true);
-      setMessages((prev) => [...prev, { sender: "ai", text: "Connecting you to a human agent..." }]);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: "Connecting you to a human agent..." },
+      ]);
     } catch (e) {
-      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: `⚠️ ${e.message}` },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -190,12 +253,10 @@ export default function ChatWindow() {
     if (!input.trim() || !supaRef.current || !conversationId) return;
     const text = input.trim();
 
-    // optimistic append
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setInput("");
 
-    // INSERT via PostgREST with our Authorization header
-    const { data: ins, error } = await supaRef.current
+    const { error } = await supaRef.current
       .from("live_messages")
       .insert({
         conversation_id: conversationId,
@@ -204,9 +265,11 @@ export default function ChatWindow() {
       })
       .select("*");
 
-    console.log("visitor insert result:", { ins, error });
     if (error) {
-      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${error.message}` }]);
+      setMessages((prev) => [
+        ...prev,
+        { sender: "ai", text: `⚠️ ${error.message}` },
+      ]);
     }
   };
 
@@ -216,20 +279,36 @@ export default function ChatWindow() {
   };
 
   return (
-    <Card className="w-full h-full flex flex-col overflow-hidden" style={{ background: "white" }}>
+    <Card
+      className="w-full h-full flex flex-col overflow-hidden"
+      style={{ background: "white" }}
+    >
       {/* Header */}
-      <div className="flex justify-between items-center p-4" style={{ background: themeColor, color: "white" }}>
+      <div
+        className="flex justify-between items-center p-4"
+        style={{ background: themeColor, color: "white" }}
+      >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(255,255,255,0.3)" }}>
+          <div
+            className="w-8 h-8 rounded-full flex items-center justify-center"
+            style={{ background: "rgba(255,255,255,0.3)" }}
+          >
             <Bot className="w-4 h-4 text-white" />
           </div>
           <div>
             <h2 className="font-semibold">{botName}</h2>
-            <p className="text-xs text-white/80">{liveMode ? "Live agent connected" : "Always here to help"}</p>
+            <p className="text-xs text-white/80">
+              {liveMode ? "Live agent connected" : "Always here to help"}
+            </p>
           </div>
         </div>
         {!liveMode && (
-          <Button variant="secondary" onClick={startHumanHandoff} disabled={loading} className="gap-2">
+          <Button
+            variant="secondary"
+            onClick={startHumanHandoff}
+            disabled={loading}
+            className="gap-2"
+          >
             <PhoneCall className="w-4 h-4" /> Talk to a human
           </Button>
         )}
@@ -240,18 +319,31 @@ export default function ChatWindow() {
         {messages.length === 0 && (
           <div className="text-center py-8">
             <h3 className="font-semibold mb-2">{botName} is ready to help!</h3>
-            <p className="text-sm text-gray-600">Ask me anything about this website or company.</p>
+            <p className="text-sm text-gray-600">
+              Ask me anything about this website or company.
+            </p>
           </div>
         )}
 
         {messages.map((msg, idx) => (
-          <div key={idx} className={`flex gap-3 ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
+          <div
+            key={idx}
+            className={`flex gap-3 ${
+              msg.sender === "user" ? "justify-end" : "justify-start"
+            }`}
+          >
             {msg.sender !== "user" && (
               <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
                 <Bot className="w-4 h-4 text-white" />
               </div>
             )}
-            <div className={`max-w-[80%] px-4 py-3 rounded-2xl ${msg.sender === "user" ? "bg-blue-500 text-white rounded-br-md" : "bg-white border rounded-bl-md"}`}>
+            <div
+              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                msg.sender === "user"
+                  ? "bg-blue-500 text-white rounded-br-md"
+                  : "bg-white border rounded-bl-md"
+              }`}
+            >
               <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
             </div>
             {msg.sender === "user" && (
@@ -281,10 +373,17 @@ export default function ChatWindow() {
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={liveMode ? "Type a message to the agent..." : "Ask me anything..."}
+          placeholder={
+            liveMode ? "Type a message to the agent..." : "Ask me anything..."
+          }
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && onSend()}
         />
-        <Button onClick={onSend} disabled={!input.trim()}>{liveMode ? "Send" : "Ask"}</Button>
+        <Button onClick={onSend} disabled={!input.trim()}>
+          {liveMode ? "Send" : "Ask"}
+        </Button>
+        <Button onClick={startRecording} variant="outline">
+          {isRecording ? "🎙️ Recording..." : <Mic className="w-4 h-4" />}
+        </Button>
       </div>
     </Card>
   );
