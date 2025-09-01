@@ -25,6 +25,7 @@
   // Create iframe
   const iframe = document.createElement("iframe");
   iframe.src = `https://rag-cloud-embedding-frontend.vercel.app/chatbot?apiKey=${apiKey}&clientDomain=${encodeURIComponent(clientDomain)}&themeColor=${encodeURIComponent(themeColor)}&botName=${encodeURIComponent(botName)}`;
+  iframe.allow = "microphone";
   iframe.style.position = "fixed";
   iframe.style.bottom = iframeBottom;
   iframe.style.right = iframeRight;
