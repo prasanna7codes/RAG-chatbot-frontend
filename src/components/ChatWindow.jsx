@@ -36,6 +36,9 @@ export default function ChatWindow() {
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
 
+  // track last input type
+  const [lastWasVoice, setLastWasVoice] = useState(false);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setApiKey(params.get("apiKey") || "");
@@ -129,6 +132,7 @@ export default function ChatWindow() {
 
           if (data.text) {
             setInput(data.text); // fill input box with transcript
+            setLastWasVoice(true); // mark as voice input
           } else {
             setMessages((prev) => [
               ...prev,
@@ -157,9 +161,16 @@ export default function ChatWindow() {
   // ===== RAG flow =====
   const sendBotMessage = async () => {
     if (!input.trim() || !apiKey || !clientDomain) return;
+
     const text = input.trim();
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setLoading(true);
+
+    // if user typed, mark as not voice
+    if (!lastWasVoice) {
+      setLastWasVoice(false);
+    }
+
     try {
       const res = await fetch(
         "https://trying-cloud-embedding-again.onrender.com/query/",
@@ -182,8 +193,10 @@ export default function ChatWindow() {
       };
       setMessages((prev) => [...prev, aiMessage]);
 
-      // auto-play answer
-      playTTS(aiMessage.text);
+      // 🔹 Only play TTS if last input was from voice
+      if (lastWasVoice) {
+        playTTS(aiMessage.text);
+      }
     } catch (e) {
       setMessages((prev) => [
         ...prev,
