@@ -24,6 +24,13 @@ export default function ChatWindow() {
   const [liveMode, setLiveMode] = useState(false);
   const [conversationId, setConversationId] = useState(null);
 
+
+
+  // voice mode toggle + bot speaking tracker
+const [voiceMode, setVoiceMode] = useState(false);
+const [botSpeaking, setBotSpeaking] = useState(false);
+
+
   // refs
   const supaRef = useRef(null);
   const channelRef = useRef(null);
@@ -74,7 +81,7 @@ export default function ChatWindow() {
   const playTTS = async (text) => {
     try {
       const res = await fetch(
-        "https://trying-cloud-embedding-again.onrender.com/tts?text=" +
+        "http://127.0.0.1:8000/tts?text=" +
           encodeURIComponent(text)
       );
       const blob = await res.blob();
@@ -87,7 +94,7 @@ export default function ChatWindow() {
   };
 
 
-  // ===== voice recording (STT Whisper) with device logging =====
+  // ===== voice recording (STT ) with device logging =====
 const toggleRecording = async () => {
   if (isRecording) {
     // Stop recording
@@ -147,16 +154,21 @@ const toggleRecording = async () => {
 
       try {
         const res = await fetch(
-          "https://trying-cloud-embedding-again.onrender.com/stt",
+          "http://127.0.0.1:8000/stt",
           { method: "POST", body: formData }
         );
         const data = await res.json();
         console.log("STT response:", data);
 
         if (data.text) {
-          setInput(data.text);
-          setLastWasVoice(true);
-        } else {
+  console.log("Voice transcript:", data.text);
+
+  // mark as voice input
+  setLastWasVoice(true);
+
+  // directly send transcript to bot (skip input field)
+  sendBotMessageDirect(data.text);
+} else {
           setMessages((prev) => [
             ...prev,
             { sender: "ai", text: "⚠️ Could not transcribe audio." },
@@ -192,61 +204,95 @@ const toggleRecording = async () => {
 
 
   // ===== RAG flow =====
-  const sendBotMessage = async () => {
-    if (!input.trim() || !apiKey || !clientDomain) return;
+const sendBotMessage = async () => {
+  if (!input.trim() || !apiKey || !clientDomain) return;
 
-    const text = input.trim();
-    setMessages((prev) => [...prev, { sender: "user", text }]);
-    setLoading(true);
+  const text = input.trim();
 
-    // if user typed, mark as not voice
-    if (!lastWasVoice) {
-      setLastWasVoice(false);
-    }
+  // typed input -> show bubble
+  setMessages((prev) => [...prev, { sender: "user", text }]);
+  setLastWasVoice(false); // mark explicitly
 
-    try {
-      const res = await fetch(
-        "https://trying-cloud-embedding-again.onrender.com/query/",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": apiKey,
-            "X-Client-Domain": clientDomain,
-            "X-Session-Id": sessionId,
-          },
-          body: JSON.stringify({ question: text }),
-        }
-      );
-      if (!res.ok) throw new Error("Error fetching answer");
-      const data = await res.json();
-      const aiMessage = {
-        sender: "ai",
-        text: data.answer || "Sorry, I could not find an answer.",
-      };
-      setMessages((prev) => [...prev, aiMessage]);
+  setLoading(true);
 
-      // 🔹 Only play TTS if last input was from voice
-      if (lastWasVoice) {
-        playTTS(aiMessage.text);
-      }
-    } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        { sender: "ai", text: `⚠️ ${e.message}` },
-      ]);
-    }
-    setInput("");
-    setLoading(false);
-    inputRef.current?.focus();
-  };
+  try {
+    const res = await fetch("http://127.0.0.1:8000/query/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey,
+        "X-Client-Domain": clientDomain,
+        "X-Session-Id": sessionId,
+      },
+      body: JSON.stringify({ question: text }),
+    });
+
+    if (!res.ok) throw new Error("Error fetching answer");
+
+    const data = await res.json();
+    const aiMessage = {
+      sender: "ai",
+      text: data.answer || "Sorry, I could not find an answer.",
+    };
+
+    // typed input -> show chatbot bubble
+    setMessages((prev) => [...prev, aiMessage]);
+
+    // 🚫 no TTS for text input
+  } catch (e) {
+    setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
+  }
+
+  setInput("");
+  setLoading(false);
+  inputRef.current?.focus();
+};
+
+
+const sendBotMessageDirect = async (voiceText) => {
+  if (!voiceText || !apiKey || !clientDomain) return;
+
+  setLastWasVoice(true); // voice input
+
+  setLoading(true);
+
+  try {
+    const res = await fetch("http://127.0.0.1:8000/query/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey,
+        "X-Client-Domain": clientDomain,
+        "X-Session-Id": sessionId,
+      },
+      body: JSON.stringify({ question: voiceText }),
+    });
+
+    if (!res.ok) throw new Error("Error fetching answer");
+
+    const data = await res.json();
+    const aiMessage = data.answer || "Sorry, I could not find an answer.";
+
+    // 🚫 don’t show bubbles for voice input
+    // 🔊 just play TTS
+    playTTS(aiMessage);
+  } catch (e) {
+    console.error("Voice flow error:", e);
+  }
+
+  setLoading(false);
+  setLastWasVoice(false);
+};
+
+
+
 
   // ===== LIVE handoff =====
   const startHumanHandoff = async () => {
     try {
       setLoading(true);
       const res = await fetch(
-        "https://trying-cloud-embedding-again.onrender.com/live/request",
+        "http://127.0.0.1:8000/live/request",
         {
           method: "POST",
           headers: {
@@ -385,6 +431,7 @@ const toggleRecording = async () => {
               {liveMode ? "Live agent connected" : "Always here to help"}
             </p>
           </div>
+ 
         </div>
         {!liveMode && (
           <Button
@@ -466,7 +513,7 @@ const toggleRecording = async () => {
           {liveMode ? "Send" : "Ask"}
         </Button>
         <Button onClick={toggleRecording} variant="outline">
-          {isRecording ? "🛑 Stop Recording" : <Mic className="w-4 h-4" />}
+          {isRecording ? "🛑 STOP RECORDING" : <Mic className="w-4 h-4" />}
         </Button>
       </div>
     </Card>
