@@ -149,8 +149,8 @@
     --chat-bot-foreground: 0 0% 98%;
     --chat-background: 240 10% 3.9%;
 
-    --voice-background: 240 10% 3%;
-    --voice-foreground: 0 0% 100%;
+    --voice-background: 240 8% 14%;
+    --voice-foreground: 0 0% 96%;
 
     --sidebar-background: 240 5.9% 10%;
     --sidebar-foreground: 240 4.8% 95.9%;
@@ -184,4 +184,11 @@
   .animate-voice-pulse { animation: voice-pulse 2s ease-in-out infinite; }
   .animate-slide-up { animation: slide-up 0.3s ease-out; }
   .animate-fade-in { animation: fade-in 0.2s ease-out; }
+}
+
+@layer utilities {
+  @keyframes bounce-gentle {
+    0%, 100% { transform: scaleY(0.6); }
+    50% { transform: scaleY(1); }
+  }
 }

@@ -409,10 +409,10 @@ export default function ChatWindow() {
   // Voice Mode UI
   if (viewMode === "voice") {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-voice-background text-voice-foreground rounded-2xl shadow-elegant overflow-hidden relative">
+      <div className="w-full h-full flex flex-col items-center justify-center bg-voice-background text-voice-foreground rounded-2xl overflow-hidden relative border border-white/10">
         
         {/* Subtle Background Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-br from-voice-primary/5 to-voice-secondary/5"></div>
+        <div className="absolute inset-0 bg-gradient-to-br from-voice-primary/3 to-voice-secondary/3"></div>
         
         {/* Header */}
         <div className="absolute top-6 left-0 right-0 text-center z-10">
@@ -447,7 +447,8 @@ export default function ChatWindow() {
                     : "voice-idle"
               }
               onClick={toggleRecording}
-              className="relative z-10 transform transition-all duration-300 hover:scale-105"
+              className="relative z-10 transform transition-all duration-300 hover:scale-105
+           bg-voice-primary text-voice-foreground rounded-full h-16 w-16 focus:outline-none focus:ring-2 focus:ring-voice-primary/40"
             >
               {botSpeaking ? (
                 <Loader2 className="w-8 h-8 animate-spin" />
