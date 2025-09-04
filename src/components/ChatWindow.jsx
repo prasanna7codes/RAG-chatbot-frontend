@@ -30,6 +30,8 @@ export default function ChatWindow() {
 const [voiceMode, setVoiceMode] = useState(false);
 const [botSpeaking, setBotSpeaking] = useState(false);
 
+const [viewMode, setViewMode] = useState("text");
+
 
   // refs
   const supaRef = useRef(null);
@@ -79,19 +81,26 @@ const [botSpeaking, setBotSpeaking] = useState(false);
 
   // ===== helper: play bot reply with ElevenLabs TTS =====
   const playTTS = async (text) => {
-    try {
-      const res = await fetch(
-        "http://127.0.0.1:8000/tts?text=" +
-          encodeURIComponent(text)
-      );
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.play();
-    } catch (e) {
-      console.error("TTS error:", e);
-    }
-  };
+  try {
+    setBotSpeaking(true); // show "AI is speaking..."
+    const res = await fetch(
+      "https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text)
+    );
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+
+    audio.onended = () => {
+      setBotSpeaking(false); // hide when finished
+    };
+
+    audio.play();
+  } catch (e) {
+    console.error("TTS error:", e);
+    setBotSpeaking(false);
+  }
+};
+
 
 
   // ===== voice recording (STT ) with device logging =====
@@ -154,7 +163,7 @@ const toggleRecording = async () => {
 
       try {
         const res = await fetch(
-          "http://127.0.0.1:8000/stt",
+          "https://trying-cloud-embedding-again.onrender.com/stt",
           { method: "POST", body: formData }
         );
         const data = await res.json();
@@ -216,7 +225,7 @@ const sendBotMessage = async () => {
   setLoading(true);
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/query/", {
+    const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -257,7 +266,7 @@ const sendBotMessageDirect = async (voiceText) => {
   setLoading(true);
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/query/", {
+    const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -292,7 +301,7 @@ const sendBotMessageDirect = async (voiceText) => {
     try {
       setLoading(true);
       const res = await fetch(
-        "http://127.0.0.1:8000/live/request",
+        "https://trying-cloud-embedding-again.onrender.com/live/request",
         {
           method: "POST",
           headers: {
@@ -408,6 +417,65 @@ const sendBotMessageDirect = async (voiceText) => {
     return sendBotMessage();
   };
 
+  if (viewMode === "voice") {
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-800 text-white rounded-2xl shadow-xl">
+      
+      {/* Header */}
+      <div className="absolute top-4 left-0 right-0 text-center">
+        <h2 className="text-2xl font-semibold">{botName}</h2>
+        <p className="text-sm text-gray-400">Voice Conversation</p>
+      </div>
+
+      {/* Mic Button */}
+      <div className="flex flex-col items-center justify-center flex-1">
+        <Button
+          size="lg"
+          disabled={botSpeaking}   // ⬅️ disable while AI is speaking
+          className={`rounded-full w-28 h-28 flex items-center justify-center text-4xl shadow-lg transition-all duration-300 ${
+            botSpeaking
+              ? "bg-gray-600 cursor-not-allowed"
+              : isRecording
+                ? "bg-red-500 hover:bg-red-600 animate-pulse"
+                : "bg-green-500 hover:bg-green-600"
+          }`}
+          onClick={toggleRecording}
+        >
+          {botSpeaking ? "🔒" : isRecording ? "🛑" : "🎤"}
+        </Button>
+
+        {/* Instruction / Status */}
+        <div className="mt-6 text-lg font-medium text-gray-300 text-center">
+          {botSpeaking ? (
+            <div className="flex items-center justify-center gap-2">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span>AI is speaking...</span>
+            </div>
+          ) : isRecording ? (
+            "Listening... Press again when you’re done."
+          ) : (
+            "Press the button to speak"
+          )}
+        </div>
+      </div>
+
+      {/* Back Button */}
+      <div className="absolute bottom-6">
+        <Button
+          variant="secondary"
+          className="rounded-full px-6 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-white"
+          onClick={() => setViewMode("text")}
+        >
+          ⬅️ Back to Chat
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+
+
   return (
     <Card
       className="w-full h-full flex flex-col overflow-hidden"
@@ -512,9 +580,9 @@ const sendBotMessageDirect = async (voiceText) => {
         <Button onClick={onSend} disabled={!input.trim()}>
           {liveMode ? "Send" : "Ask"}
         </Button>
-        <Button onClick={toggleRecording} variant="outline">
-          {isRecording ? "🛑 STOP RECORDING" : <Mic className="w-4 h-4" />}
-        </Button>
+        <Button variant="outline" onClick={() => setViewMode("voice")}>
+  🎙️ Voice Chat
+</Button>
       </div>
     </Card>
   );
