@@ -529,7 +529,7 @@ scroller.scrollTo({ top: Math.max(top - 16, 0), behavior: "smooth" });
 
   // Text Mode UI
   return (
-    <Card className="w-full h-full flex flex-col overflow-hidden shadow-elegant bg-gradient-subtle border-0">
+    <Card className="w-full h-full flex flex-col min-h-0 overflow-hidden shadow-elegant bg-gradient-subtle border-0">
       {/* Modern Header */}
       <div 
         className="relative px-6 py-4 bg-gradient-primary text-white overflow-hidden"
@@ -581,8 +581,11 @@ scroller.scrollTo({ top: Math.max(top - 16, 0), behavior: "smooth" });
       </div>
 
       {/* Messages Area */}
-      <CardContent className="flex-1 p-0">
-  <div ref={scrollRef} className="h-full overflow-y-auto bg-chat-background">
+      <CardContent className="flex-1 min-h-0 p-0">
+  <div
+  ref={scrollRef}
+  className="h-full overflow-y-auto bg-chat-background overscroll-contain scroll-pb-28"
+>
     <div className="p-6 space-y-6">
       {messages.length === 0 && (
         <div className="text-center py-12 animate-fade-in">
