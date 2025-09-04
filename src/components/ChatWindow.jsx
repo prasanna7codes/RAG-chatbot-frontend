@@ -450,13 +450,11 @@ export default function ChatWindow() {
               className="relative z-10 transform transition-all duration-300 hover:scale-105
            bg-voice-primary text-voice-foreground rounded-full h-16 w-16 focus:outline-none focus:ring-2 focus:ring-voice-primary/40"
             >
-              {botSpeaking ? (
-                <Loader2 className="w-8 h-8 animate-spin" />
-              ) : isRecording ? (
-                <div className="w-8 h-8 rounded-full bg-current animate-pulse" />
-              ) : (
-                <Mic className="w-8 h-8" />
-              )}
+              {(botSpeaking || isRecording) ? (
+  <div className="w-8 h-8 rounded-full bg-current animate-pulse" />
+) : (
+  <Mic className="w-8 h-8" />
+)}
             </Button>
           </div>
 
@@ -481,20 +479,22 @@ export default function ChatWindow() {
           </div>
 
           {/* Simple Audio Visualization */}
-          {isRecording && (
-            <div className="flex items-center gap-1 mt-6">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div
-                  key={i}
-                  className="w-1 h-8 bg-voice-primary rounded-full opacity-60"
-                  style={{
-                    animation: `bounce-gentle 1s ease-in-out infinite`,
-                    animationDelay: `${i * 0.1}s`
-                  }}
-                />
-              ))}
-            </div>
-          )}
+          {(isRecording || botSpeaking) && (
+  <div className="flex items-center gap-1 mt-6">
+    {[1, 2, 3, 4, 5].map((i) => (
+      <div
+        key={i}
+        className={`w-1 h-8 rounded-full opacity-60 ${
+          botSpeaking ? "bg-voice-secondary" : "bg-voice-primary"
+        }`}
+        style={{
+          animation: `bounce-gentle 1s ease-in-out infinite`,
+          animationDelay: `${i * 0.1}s`
+        }}
+      />
+    ))}
+  </div>
+)}
         </div>
 
         {/* Back Button */}
