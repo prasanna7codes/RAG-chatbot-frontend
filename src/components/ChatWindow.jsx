@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef,useLayoutEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,9 @@ export default function ChatWindow() {
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
+const scrollRef = useRef(null);      // the scrollable container
+const lastAiRef = useRef(null);      // the last AI message element
+
   // voice
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
@@ -68,8 +71,19 @@ export default function ChatWindow() {
   }, []);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+const scroller = scrollRef.current;
+if (!scroller) return;
+
+const last = messages[messages.length - 1];
+if (!last) return;
+ // If the last message is from the AI, scroll so its TOP is visible
+if (last.sender === "ai" && lastAiRef.current) {
+const top = lastAiRef.current.offsetTop ?? 0;
+scroller.scrollTo({ top: Math.max(top - 16, 0), behavior: "smooth" });
+} else {
+    // Otherwise (user message, typing indicator), keep the old behavior: bottom
+   scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+}  }, [messages, loading]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -567,71 +581,73 @@ export default function ChatWindow() {
       </div>
 
       {/* Messages Area */}
-      <CardContent className="flex-1 overflow-y-auto p-0 bg-chat-background">
-        <div className="p-6 space-y-6">
-          {messages.length === 0 && (
-            <div className="text-center py-12 animate-fade-in">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center shadow-glow
-+                 bg-[linear-gradient(135deg,_hsl(var(--primary)),_hsl(292_84%_61%))]">
-                <Sparkles className="w-8 h-8 text-white" />
-              </div>
-              <h3 className="text-xl font-bold text-foreground mb-2">Welcome to {botName}!</h3>
-              <p className="text-muted-foreground max-w-md mx-auto">
-                I'm here to help you with any questions about this website or company. 
-                Feel free to ask me anything!
-              </p>
-            </div>
-          )}
-
-          {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              className={`flex gap-4 animate-slide-up ${
-                msg.sender === "user" ? "justify-end" : "justify-start"
-              }`}
-              style={{ animationDelay: `${idx * 50}ms` }}
-            >
-              {msg.sender !== "user" && (
-                <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                  <Bot className="w-5 h-5 text-white" />
-                </div>
-              )}
-              
-              <div
-                className={`max-w-[85%] px-4 py-3 rounded-2xl shadow-sm backdrop-blur-sm transition-all duration-200 hover:shadow-md ${
-                  msg.sender === "user"
-                    ? "bg-chat-user text-chat-user-foreground rounded-br-md shadow-glow"
-                    : "bg-chat-bot text-chat-bot-foreground border border-border/50 rounded-bl-md"
-                }`}
-              >
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
-              </div>
-              
-              {msg.sender === "user" && (
-                <div className="w-10 h-10 rounded-full bg-secondary shadow-sm flex items-center justify-center flex-shrink-0 mt-1">
-                  <User className="w-5 h-5 text-secondary-foreground" />
-                </div>
-              )}
-            </div>
-          ))}
-
-          {loading && (
-            <div className="flex gap-4 animate-fade-in">
-              <div className="w-10 h-10 rounded-full bg-gradient-primary shadow-elegant flex items-center justify-center flex-shrink-0">
-                <Bot className="w-5 h-5 text-white" />
-              </div>
-              <div className="bg-chat-bot border border-border/50 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-3 shadow-sm">
-                <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                <span className="text-sm text-muted-foreground">
-                  {liveMode ? "Agent is typing..." : "Thinking..."}
-                </span>
-              </div>
-            </div>
-          )}
-          
-          <div ref={chatEndRef} />
+      <CardContent className="flex-1 p-0">
+  <div ref={scrollRef} className="h-full overflow-y-auto bg-chat-background">
+    <div className="p-6 space-y-6">
+      {messages.length === 0 && (
+        <div className="text-center py-12 animate-fade-in">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center shadow-glow bg-[linear-gradient(135deg,_hsl(var(--primary)),_hsl(292_84%_61%))]">
+            <Sparkles className="w-8 h-8 text-white" />
+          </div>
+          <h3 className="text-xl font-bold text-foreground mb-2">Welcome to {botName}!</h3>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            I'm here to help you with any questions about this website or company. 
+            Feel free to ask me anything!
+          </p>
         </div>
-      </CardContent>
+      )}
+
+      {messages.map((msg, idx) => (
+        <div
+          key={idx}
+          className={`flex gap-4 animate-slide-up ${
+            msg.sender === "user" ? "justify-end" : "justify-start"
+          }`}
+          style={{ animationDelay: `${idx * 50}ms` }}
+          ref={idx === messages.length - 1 && msg.sender === "ai" ? lastAiRef : null}
+        >
+          {msg.sender !== "user" && (
+            <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+              <Bot className="w-5 h-5 text-white" />
+            </div>
+          )}
+
+          <div
+            className={`max-w-[85%] px-4 py-3 rounded-2xl shadow-sm backdrop-blur-sm transition-all duration-200 hover:shadow-md ${
+              msg.sender === "user"
+                ? "bg-chat-user text-chat-user-foreground rounded-br-md shadow-glow"
+                : "bg-chat-bot text-chat-bot-foreground border border-border/50 rounded-bl-md"
+            }`}
+          >
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+          </div>
+
+          {msg.sender === "user" && (
+            <div className="w-10 h-10 rounded-full bg-secondary shadow-sm flex items-center justify-center flex-shrink-0 mt-1">
+              <User className="w-5 h-5 text-secondary-foreground" />
+            </div>
+          )}
+        </div>
+      ))}
+
+      {loading && (
+        <div className="flex gap-4 animate-fade-in">
+          <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+            <Bot className="w-5 h-5 text-white" />
+          </div>
+          <div className="bg-chat-bot border border-border/50 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-3 shadow-sm">
+            <Loader2 className="w-4 h-4 animate-spin text-primary" />
+            <span className="text-sm text-muted-foreground">
+              {liveMode ? "Agent is typing..." : "Thinking..."}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <div ref={chatEndRef} />
+    </div>
+  </div>
+</CardContent>
 
       {/* Modern Input Area */}
       <div className="p-6 border-t border-border/50 bg-gradient-subtle backdrop-blur-sm">
