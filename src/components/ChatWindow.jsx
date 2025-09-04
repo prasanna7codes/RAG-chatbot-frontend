@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Loader2, Bot, User, PhoneCall, Mic } from "lucide-react";
+import { Loader2, Bot, User, PhoneCall, Mic, Send, ArrowLeft, Sparkles } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -24,14 +24,11 @@ export default function ChatWindow() {
   const [liveMode, setLiveMode] = useState(false);
   const [conversationId, setConversationId] = useState(null);
 
-
-
   // voice mode toggle + bot speaking tracker
-const [voiceMode, setVoiceMode] = useState(false);
-const [botSpeaking, setBotSpeaking] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [botSpeaking, setBotSpeaking] = useState(false);
 
-const [viewMode, setViewMode] = useState("text");
-
+  const [viewMode, setViewMode] = useState("text");
 
   // refs
   const supaRef = useRef(null);
@@ -81,220 +78,213 @@ const [viewMode, setViewMode] = useState("text");
 
   // ===== helper: play bot reply with ElevenLabs TTS =====
   const playTTS = async (text) => {
-  try {
-    setBotSpeaking(true); // show "AI is speaking..."
-    const res = await fetch(
-      "https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text)
-    );
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
+    try {
+      setBotSpeaking(true); // show "AI is speaking..."
+      const res = await fetch(
+        "https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text)
+      );
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
 
-    audio.onended = () => {
-      setBotSpeaking(false); // hide when finished
-    };
+      audio.onended = () => {
+        setBotSpeaking(false); // hide when finished
+      };
 
-    audio.play();
-  } catch (e) {
-    console.error("TTS error:", e);
-    setBotSpeaking(false);
-  }
-};
-
-
+      audio.play();
+    } catch (e) {
+      console.error("TTS error:", e);
+      setBotSpeaking(false);
+    }
+  };
 
   // ===== voice recording (STT ) with device logging =====
-const toggleRecording = async () => {
-  if (isRecording) {
-    // Stop recording
-    mediaRecorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach((t) => t.stop()); // cleanup
-    setIsRecording(false);
-    return;
-  }
-
-  try {
-    console.log("🎙️ Requesting microphone access...");
-
-    // 🔍 List available media devices
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    console.log("🔊 Available devices:", devices);
-    const mics = devices.filter((d) => d.kind === "audioinput");
-    if (mics.length === 0) {
-      console.warn("⚠️ No microphones detected!");
-    } else {
-      console.log("🎤 Detected microphones:", mics.map((m) => m.label || "Unnamed mic"));
+  const toggleRecording = async () => {
+    if (isRecording) {
+      // Stop recording
+      mediaRecorderRef.current?.stop();
+      streamRef.current?.getTracks().forEach((t) => t.stop()); // cleanup
+      setIsRecording(false);
+      return;
     }
 
-    // ✅ Request mic stream
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
+    try {
+      console.log("🎙️ Requesting microphone access...");
 
-    // Pick supported MIME type
-    let options = { mimeType: "audio/webm;codecs=opus" };
-    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-      options = { mimeType: "audio/webm" };
-    }
-    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-      options = {}; // fallback
-    }
-
-    const mediaRecorder = new MediaRecorder(stream, options);
-    mediaRecorderRef.current = mediaRecorder;
-    audioChunksRef.current = [];
-
-    mediaRecorder.onstart = () => {
-      console.log("✅ Recording started with MIME:", mediaRecorder.mimeType);
-      setIsRecording(true);
-    };
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        audioChunksRef.current.push(e.data);
+      // 🔍 List available media devices
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      console.log("🔊 Available devices:", devices);
+      const mics = devices.filter((d) => d.kind === "audioinput");
+      if (mics.length === 0) {
+        console.warn("⚠️ No microphones detected!");
+      } else {
+        console.log("🎤 Detected microphones:", mics.map((m) => m.label || "Unnamed mic"));
       }
-    };
 
-    mediaRecorder.onstop = async () => {
-      console.log("🛑 Recording stopped");
-      const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+      // ✅ Request mic stream
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-      const formData = new FormData();
-      formData.append("file", blob, "recording.webm");
+      // Pick supported MIME type
+      let options = { mimeType: "audio/webm;codecs=opus" };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: "audio/webm" };
+      }
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = {}; // fallback
+      }
 
-      try {
-        const res = await fetch(
-          "https://trying-cloud-embedding-again.onrender.com/stt",
-          { method: "POST", body: formData }
-        );
-        const data = await res.json();
-        console.log("STT response:", data);
+      const mediaRecorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
 
-        if (data.text) {
-  console.log("Voice transcript:", data.text);
+      mediaRecorder.onstart = () => {
+        console.log("✅ Recording started with MIME:", mediaRecorder.mimeType);
+        setIsRecording(true);
+      };
 
-  // mark as voice input
-  setLastWasVoice(true);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
 
-  // directly send transcript to bot (skip input field)
-  sendBotMessageDirect(data.text);
-} else {
+      mediaRecorder.onstop = async () => {
+        console.log("🛑 Recording stopped");
+        const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+
+        const formData = new FormData();
+        formData.append("file", blob, "recording.webm");
+
+        try {
+          const res = await fetch(
+            "https://trying-cloud-embedding-again.onrender.com/stt",
+            { method: "POST", body: formData }
+          );
+          const data = await res.json();
+          console.log("STT response:", data);
+
+          if (data.text) {
+            console.log("Voice transcript:", data.text);
+
+            // mark as voice input
+            setLastWasVoice(true);
+
+            // directly send transcript to bot (skip input field)
+            sendBotMessageDirect(data.text);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { sender: "ai", text: "⚠️ Could not transcribe audio." },
+            ]);
+          }
+        } catch (err) {
+          console.error("❌ STT error:", err);
           setMessages((prev) => [
             ...prev,
-            { sender: "ai", text: "⚠️ Could not transcribe audio." },
+            { sender: "ai", text: "⚠️ Error sending audio to server." },
           ]);
         }
-      } catch (err) {
-        console.error("❌ STT error:", err);
-        setMessages((prev) => [
-          ...prev,
-          { sender: "ai", text: "⚠️ Error sending audio to server." },
-        ]);
+      };
+
+      mediaRecorder.start();
+    } catch (err) {
+      console.error("❌ getUserMedia failed:", err);
+
+      let errorMsg = "⚠️ Microphone access denied or unavailable.";
+      if (err.name === "NotAllowedError") {
+        errorMsg = "⚠️ Permission denied. Please allow microphone access.";
+      } else if (err.name === "NotFoundError") {
+        errorMsg = "⚠️ No microphone found. Please connect one.";
+      } else if (err.name === "NotReadableError") {
+        errorMsg = "⚠️ Microphone is in use by another app.";
+      } else if (err.name === "SecurityError") {
+        errorMsg = "⚠️ Access blocked due to insecure context (use HTTPS or localhost).";
       }
-    };
 
-    mediaRecorder.start();
-  } catch (err) {
-    console.error("❌ getUserMedia failed:", err);
-
-    let errorMsg = "⚠️ Microphone access denied or unavailable.";
-    if (err.name === "NotAllowedError") {
-      errorMsg = "⚠️ Permission denied. Please allow microphone access.";
-    } else if (err.name === "NotFoundError") {
-      errorMsg = "⚠️ No microphone found. Please connect one.";
-    } else if (err.name === "NotReadableError") {
-      errorMsg = "⚠️ Microphone is in use by another app.";
-    } else if (err.name === "SecurityError") {
-      errorMsg = "⚠️ Access blocked due to insecure context (use HTTPS or localhost).";
+      setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
     }
-
-    setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
-  }
-};
-
+  };
 
   // ===== RAG flow =====
-const sendBotMessage = async () => {
-  if (!input.trim() || !apiKey || !clientDomain) return;
+  const sendBotMessage = async () => {
+    if (!input.trim() || !apiKey || !clientDomain) return;
 
-  const text = input.trim();
+    const text = input.trim();
 
-  // typed input -> show bubble
-  setMessages((prev) => [...prev, { sender: "user", text }]);
-  setLastWasVoice(false); // mark explicitly
+    // typed input -> show bubble
+    setMessages((prev) => [...prev, { sender: "user", text }]);
+    setLastWasVoice(false); // mark explicitly
 
-  setLoading(true);
+    setLoading(true);
 
-  try {
-    const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-        "X-Client-Domain": clientDomain,
-        "X-Session-Id": sessionId,
-      },
-      body: JSON.stringify({ question: text }),
-    });
+    try {
+      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+          "X-Client-Domain": clientDomain,
+          "X-Session-Id": sessionId,
+        },
+        body: JSON.stringify({ question: text }),
+      });
 
-    if (!res.ok) throw new Error("Error fetching answer");
+      if (!res.ok) throw new Error("Error fetching answer");
 
-    const data = await res.json();
-    const aiMessage = {
-      sender: "ai",
-      text: data.answer || "Sorry, I could not find an answer.",
-    };
+      const data = await res.json();
+      const aiMessage = {
+        sender: "ai",
+        text: data.answer || "Sorry, I could not find an answer.",
+      };
 
-    // typed input -> show chatbot bubble
-    setMessages((prev) => [...prev, aiMessage]);
+      // typed input -> show chatbot bubble
+      setMessages((prev) => [...prev, aiMessage]);
 
-    // 🚫 no TTS for text input
-  } catch (e) {
-    setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
-  }
+      // 🚫 no TTS for text input
+    } catch (e) {
+      setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
+    }
 
-  setInput("");
-  setLoading(false);
-  inputRef.current?.focus();
-};
+    setInput("");
+    setLoading(false);
+    inputRef.current?.focus();
+  };
 
+  const sendBotMessageDirect = async (voiceText) => {
+    if (!voiceText || !apiKey || !clientDomain) return;
 
-const sendBotMessageDirect = async (voiceText) => {
-  if (!voiceText || !apiKey || !clientDomain) return;
+    setLastWasVoice(true); // voice input
 
-  setLastWasVoice(true); // voice input
+    setLoading(true);
 
-  setLoading(true);
+    try {
+      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+          "X-Client-Domain": clientDomain,
+          "X-Session-Id": sessionId,
+        },
+        body: JSON.stringify({ question: voiceText }),
+      });
 
-  try {
-    const res = await fetch("https://trying-cloud-embedding-again.onrender.com/query/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-        "X-Client-Domain": clientDomain,
-        "X-Session-Id": sessionId,
-      },
-      body: JSON.stringify({ question: voiceText }),
-    });
+      if (!res.ok) throw new Error("Error fetching answer");
 
-    if (!res.ok) throw new Error("Error fetching answer");
+      const data = await res.json();
+      const aiMessage = data.answer || "Sorry, I could not find an answer.";
 
-    const data = await res.json();
-    const aiMessage = data.answer || "Sorry, I could not find an answer.";
+      // 🚫 don't show bubbles for voice input
+      // 🔊 just play TTS
+      playTTS(aiMessage);
+    } catch (e) {
+      console.error("Voice flow error:", e);
+    }
 
-    // 🚫 don’t show bubbles for voice input
-    // 🔊 just play TTS
-    playTTS(aiMessage);
-  } catch (e) {
-    console.error("Voice flow error:", e);
-  }
-
-  setLoading(false);
-  setLastWasVoice(false);
-};
-
-
-
+    setLoading(false);
+    setLastWasVoice(false);
+  };
 
   // ===== LIVE handoff =====
   const startHumanHandoff = async () => {
@@ -417,172 +407,277 @@ const sendBotMessageDirect = async (voiceText) => {
     return sendBotMessage();
   };
 
+  // Voice Mode UI
   if (viewMode === "voice") {
-  return (
-    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-800 text-white rounded-2xl shadow-xl">
-      
-      {/* Header */}
-      <div className="absolute top-4 left-0 right-0 text-center">
-        <h2 className="text-2xl font-semibold">{botName}</h2>
-        <p className="text-sm text-gray-400">Voice Conversation</p>
-      </div>
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center bg-voice-background text-voice-foreground rounded-2xl shadow-elegant overflow-hidden relative">
+        
+        {/* Animated Background */}
+        <div className="absolute inset-0 bg-gradient-voice opacity-10 animate-pulse"></div>
+        
+        {/* Floating Particles */}
+        <div className="absolute inset-0 overflow-hidden">
+          <div className="absolute top-1/4 left-1/4 w-2 h-2 bg-voice-primary rounded-full animate-float opacity-60"></div>
+          <div className="absolute top-3/4 right-1/4 w-1 h-1 bg-voice-secondary rounded-full animate-float opacity-40" style={{animationDelay: '1s'}}></div>
+          <div className="absolute top-1/2 left-3/4 w-1.5 h-1.5 bg-voice-primary rounded-full animate-float opacity-50" style={{animationDelay: '2s'}}></div>
+        </div>
+        
+        {/* Header */}
+        <div className="absolute top-6 left-0 right-0 text-center z-10">
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <Sparkles className="w-6 h-6 text-voice-primary animate-pulse" />
+            <h2 className="text-2xl font-bold bg-gradient-voice bg-clip-text text-transparent">
+              {botName}
+            </h2>
+            <Sparkles className="w-6 h-6 text-voice-primary animate-pulse" />
+          </div>
+          <p className="text-sm text-voice-foreground/70 font-medium">Voice Conversation Mode</p>
+        </div>
 
-      {/* Mic Button */}
-      <div className="flex flex-col items-center justify-center flex-1">
-        <Button
-          size="lg"
-          disabled={botSpeaking}   // ⬅️ disable while AI is speaking
-          className={`rounded-full w-28 h-28 flex items-center justify-center text-4xl shadow-lg transition-all duration-300 ${
-            botSpeaking
-              ? "bg-gray-600 cursor-not-allowed"
-              : isRecording
-                ? "bg-red-500 hover:bg-red-600 animate-pulse"
-                : "bg-green-500 hover:bg-green-600"
-          }`}
-          onClick={toggleRecording}
-        >
-          {botSpeaking ? "🔒" : isRecording ? "🛑" : "🎤"}
-        </Button>
+        {/* Main Voice Interface */}
+        <div className="flex flex-col items-center justify-center flex-1 z-10">
+          {/* Microphone Button */}
+          <div className="relative">
+            {/* Outer ring for recording state */}
+            {isRecording && (
+              <div className="absolute inset-0 rounded-full border-4 border-voice-secondary animate-ping"></div>
+            )}
+            
+            <Button
+              size="voice"
+              disabled={botSpeaking}
+              variant={
+                botSpeaking 
+                  ? "secondary" 
+                  : isRecording 
+                    ? "voice-record" 
+                    : "voice-idle"
+              }
+              onClick={toggleRecording}
+              className="relative z-10 shadow-voice hover:shadow-voice transform transition-all duration-300"
+            >
+              {botSpeaking ? "🔒" : isRecording ? "🛑" : "🎤"}
+            </Button>
+          </div>
 
-        {/* Instruction / Status */}
-        <div className="mt-6 text-lg font-medium text-gray-300 text-center">
-          {botSpeaking ? (
-            <div className="flex items-center justify-center gap-2">
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span>AI is speaking...</span>
+          {/* Status Display */}
+          <div className="mt-8 text-center max-w-sm">
+            {botSpeaking ? (
+              <div className="flex items-center justify-center gap-3 animate-fade-in">
+                <Loader2 className="w-6 h-6 animate-spin text-voice-primary" />
+                <span className="text-lg font-semibold text-voice-foreground">AI is speaking...</span>
+              </div>
+            ) : isRecording ? (
+              <div className="animate-slide-up">
+                <div className="text-lg font-semibold text-voice-foreground mb-2">Listening...</div>
+                <div className="text-sm text-voice-foreground/70">Tap the button when you're done</div>
+              </div>
+            ) : (
+              <div className="animate-slide-up">
+                <div className="text-lg font-semibold text-voice-foreground mb-2">Ready to chat</div>
+                <div className="text-sm text-voice-foreground/70">Tap the microphone to start talking</div>
+              </div>
+            )}
+          </div>
+
+          {/* Voice Visualization */}
+          {isRecording && (
+            <div className="flex items-center gap-1 mt-6 animate-fade-in">
+              {[...Array(5)].map((_, i) => (
+                <div
+                  key={i}
+                  className="w-1 bg-voice-primary rounded-full animate-pulse"
+                  style={{
+                    height: Math.random() * 20 + 10 + 'px',
+                    animationDelay: i * 0.1 + 's',
+                    animationDuration: '0.5s'
+                  }}
+                ></div>
+              ))}
             </div>
-          ) : isRecording ? (
-            "Listening... Press again when you’re done."
-          ) : (
-            "Press the button to speak"
+          )}
+        </div>
+
+        {/* Back Button */}
+        <div className="absolute bottom-8 z-10">
+          <Button
+            variant="chat-outline"
+            size="voice-back"
+            onClick={() => setViewMode("text")}
+            className="backdrop-blur-sm border-voice-foreground/20 text-voice-foreground hover:bg-voice-foreground hover:text-voice-background"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Chat
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Text Mode UI
+  return (
+    <Card className="w-full h-full flex flex-col overflow-hidden shadow-elegant bg-gradient-subtle border-0">
+      {/* Modern Header */}
+      <div 
+        className="relative px-6 py-4 bg-gradient-primary text-white overflow-hidden"
+        style={{ 
+          background: `linear-gradient(135deg, ${themeColor}, ${themeColor}dd)` 
+        }}
+      >
+        {/* Header Background Pattern */}
+        <div className="absolute inset-0 opacity-10">
+          <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent"></div>
+        </div>
+        
+        <div className="relative flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-elegant">
+                <Bot className="w-6 h-6 text-white" />
+              </div>
+              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-400 rounded-full border-2 border-white animate-pulse"></div>
+            </div>
+            <div>
+              <h2 className="text-xl font-bold mb-1">{botName}</h2>
+              <p className="text-sm text-white/80 font-medium">
+                {liveMode ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                    Live agent connected
+                  </span>
+                ) : (
+                  "Always here to help you"
+                )}
+              </p>
+            </div>
+          </div>
+          
+          {!liveMode && (
+            <Button
+              variant="chat-outline"
+              size="sm"
+              onClick={startHumanHandoff}
+              disabled={loading}
+              className="gap-2 bg-white/10 border-white/20 text-white hover:bg-white hover:text-primary"
+            >
+              <PhoneCall className="w-4 h-4" />
+              Human Agent
+            </Button>
           )}
         </div>
       </div>
 
-      {/* Back Button */}
-      <div className="absolute bottom-6">
-        <Button
-          variant="secondary"
-          className="rounded-full px-6 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-white"
-          onClick={() => setViewMode("text")}
-        >
-          ⬅️ Back to Chat
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-
-
-
-  return (
-    <Card
-      className="w-full h-full flex flex-col overflow-hidden"
-      style={{ background: "white" }}
-    >
-      {/* Header */}
-      <div
-        className="flex justify-between items-center p-4"
-        style={{ background: themeColor, color: "white" }}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className="w-8 h-8 rounded-full flex items-center justify-center"
-            style={{ background: "rgba(255,255,255,0.3)" }}
-          >
-            <Bot className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <h2 className="font-semibold">{botName}</h2>
-            <p className="text-xs text-white/80">
-              {liveMode ? "Live agent connected" : "Always here to help"}
-            </p>
-          </div>
- 
-        </div>
-        {!liveMode && (
-          <Button
-            variant="secondary"
-            onClick={startHumanHandoff}
-            disabled={loading}
-            className="gap-2"
-          >
-            <PhoneCall className="w-4 h-4" /> Talk to a human
-          </Button>
-        )}
-      </div>
-
-      {/* Messages */}
-      <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-100">
-        {messages.length === 0 && (
-          <div className="text-center py-8">
-            <h3 className="font-semibold mb-2">{botName} is ready to help!</h3>
-            <p className="text-sm text-gray-600">
-              Ask me anything about this website or company.
-            </p>
-          </div>
-        )}
-
-        {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex gap-3 ${
-              msg.sender === "user" ? "justify-end" : "justify-start"
-            }`}
-          >
-            {msg.sender !== "user" && (
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
-                <Bot className="w-4 h-4 text-white" />
+      {/* Messages Area */}
+      <CardContent className="flex-1 overflow-y-auto p-0 bg-chat-background">
+        <div className="p-6 space-y-6">
+          {messages.length === 0 && (
+            <div className="text-center py-12 animate-fade-in">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-primary flex items-center justify-center shadow-glow">
+                <Sparkles className="w-8 h-8 text-white" />
               </div>
-            )}
+              <h3 className="text-xl font-bold text-foreground mb-2">Welcome to {botName}!</h3>
+              <p className="text-muted-foreground max-w-md mx-auto">
+                I'm here to help you with any questions about this website or company. 
+                Feel free to ask me anything!
+              </p>
+            </div>
+          )}
+
+          {messages.map((msg, idx) => (
             <div
-              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
-                msg.sender === "user"
-                  ? "bg-blue-500 text-white rounded-br-md"
-                  : "bg-white border rounded-bl-md"
+              key={idx}
+              className={`flex gap-4 animate-slide-up ${
+                msg.sender === "user" ? "justify-end" : "justify-start"
               }`}
+              style={{ animationDelay: `${idx * 50}ms` }}
             >
-              <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-            </div>
-            {msg.sender === "user" && (
-              <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
-                <User className="w-4 h-4 text-gray-700" />
+              {msg.sender !== "user" && (
+                <div className="w-10 h-10 rounded-full bg-gradient-primary shadow-elegant flex items-center justify-center flex-shrink-0 mt-1">
+                  <Bot className="w-5 h-5 text-white" />
+                </div>
+              )}
+              
+              <div
+                className={`max-w-[85%] px-4 py-3 rounded-2xl shadow-sm backdrop-blur-sm transition-all duration-200 hover:shadow-md ${
+                  msg.sender === "user"
+                    ? "bg-chat-user text-chat-user-foreground rounded-br-md shadow-glow"
+                    : "bg-chat-bot text-chat-bot-foreground border border-border/50 rounded-bl-md"
+                }`}
+              >
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
               </div>
-            )}
-          </div>
-        ))}
+              
+              {msg.sender === "user" && (
+                <div className="w-10 h-10 rounded-full bg-secondary shadow-sm flex items-center justify-center flex-shrink-0 mt-1">
+                  <User className="w-5 h-5 text-secondary-foreground" />
+                </div>
+              )}
+            </div>
+          ))}
 
-        {loading && (
-          <div className="flex gap-3">
-            <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <Bot className="w-4 h-4 text-white" />
+          {loading && (
+            <div className="flex gap-4 animate-fade-in">
+              <div className="w-10 h-10 rounded-full bg-gradient-primary shadow-elegant flex items-center justify-center flex-shrink-0">
+                <Bot className="w-5 h-5 text-white" />
+              </div>
+              <div className="bg-chat-bot border border-border/50 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-3 shadow-sm">
+                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                <span className="text-sm text-muted-foreground">
+                  {liveMode ? "Agent is typing..." : "Thinking..."}
+                </span>
+              </div>
             </div>
-            <div className="bg-white border rounded-2xl px-4 py-3 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" /> Connecting...
-            </div>
-          </div>
-        )}
-        <div ref={chatEndRef} />
+          )}
+          
+          <div ref={chatEndRef} />
+        </div>
       </CardContent>
 
-      {/* Input */}
-      <div className="p-4 border-t flex gap-2">
-        <Input
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={
-            liveMode ? "Type a message to the agent..." : "Ask me anything..."
-          }
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && onSend()}
-        />
-        <Button onClick={onSend} disabled={!input.trim()}>
-          {liveMode ? "Send" : "Ask"}
-        </Button>
-        <Button variant="outline" onClick={() => setViewMode("voice")}>
-  🎙️ Voice Chat
-</Button>
+      {/* Modern Input Area */}
+      <div className="p-6 border-t border-border/50 bg-gradient-subtle backdrop-blur-sm">
+        <div className="flex gap-3">
+          <div className="flex-1 relative">
+            <Input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={
+                liveMode 
+                  ? "Type your message to the agent..." 
+                  : "Ask me anything about this company..."
+              }
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && onSend()}
+              className="pr-12 h-12 bg-white/80 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20 rounded-xl shadow-sm transition-all duration-200"
+            />
+          </div>
+          
+          <Button 
+            onClick={onSend} 
+            disabled={!input.trim() || loading}
+            variant="chat"
+            size="default"
+            className="h-12 px-6 rounded-xl"
+          >
+            <Send className="w-4 h-4" />
+          </Button>
+          
+          <Button 
+            variant="voice" 
+            size="default"
+            onClick={() => setViewMode("voice")}
+            className="h-12 px-4 rounded-xl"
+          >
+            <Mic className="w-4 h-4" />
+          </Button>
+        </div>
+        
+        <div className="mt-3 text-xs text-center text-muted-foreground">
+          {liveMode ? (
+            "Connected to live support"
+          ) : (
+            `Powered by ${botName} • Click the mic for voice chat`
+          )}
+        </div>
       </div>
     </Card>
   );
