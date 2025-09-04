@@ -1,6 +1,45 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Tailwind v4: define tokens used by utilities like bg-background, text-foreground, etc. */
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  /* Optional extras */
+  --color-chat-user: hsl(var(--chat-user));
+  --color-chat-user-foreground: hsl(var(--chat-user-foreground));
+  --color-chat-bot: hsl(var(--chat-bot));
+  --color-chat-bot-foreground: hsl(var(--chat-bot-foreground));
+  --color-chat-background: hsl(var(--chat-background));
+
+  --color-voice-primary: hsl(var(--voice-primary));
+  --color-voice-secondary: hsl(var(--voice-secondary));
+  --color-voice-background: hsl(var(--voice-background));
+  --color-voice-foreground: hsl(var(--voice-foreground));
+}
+
 @layer base {
   :root {
     /* Base colors */
@@ -83,7 +122,6 @@
   }
 
   .dark {
-    /* Dark mode colors for chatbot */
     --background: 240 10% 3.9%;
     --foreground: 0 0% 98%;
     --card: 240 10% 3.9%;
@@ -104,15 +142,13 @@
     --border: 240 4% 15.9%;
     --input: 240 4% 15.9%;
     --ring: 262 83% 58%;
-    
-    /* Dark mode chatbot colors */
+
     --chat-user: 262 83% 58%;
     --chat-user-foreground: 0 0% 100%;
     --chat-bot: 240 4% 15.9%;
     --chat-bot-foreground: 0 0% 98%;
     --chat-background: 240 10% 3.9%;
-    
-    /* Voice mode dark */
+
     --voice-background: 240 10% 3%;
     --voice-foreground: 0 0% 100%;
 
@@ -128,52 +164,24 @@
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
+  * { border-color: var(--color-border); }
 
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
-  
+
   /* Custom scrollbar */
-  ::-webkit-scrollbar {
-    width: 6px;
-  }
-  
-  ::-webkit-scrollbar-track {
-    background: hsl(var(--muted));
-  }
-  
-  ::-webkit-scrollbar-thumb {
-    background: hsl(var(--border));
-    border-radius: 3px;
-  }
-  
-  ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground));
-  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: hsl(var(--muted)); }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
 }
 
 @layer utilities {
-  .animate-float {
-    animation: float 3s ease-in-out infinite;
-  }
-  
-  .animate-pulse-glow {
-    animation: pulse-glow 2s ease-in-out infinite;
-  }
-  
-  .animate-voice-pulse {
-    animation: voice-pulse 2s ease-in-out infinite;
-  }
-  
-  .animate-slide-up {
-    animation: slide-up 0.3s ease-out;
-  }
-  
-  .animate-fade-in {
-    animation: fade-in 0.2s ease-out;
-  }
+  .animate-float { animation: float 3s ease-in-out infinite; }
+  .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+  .animate-voice-pulse { animation: voice-pulse 2s ease-in-out infinite; }
+  .animate-slide-up { animation: slide-up 0.3s ease-out; }
+  .animate-fade-in { animation: fade-in 0.2s ease-out; }
 }
