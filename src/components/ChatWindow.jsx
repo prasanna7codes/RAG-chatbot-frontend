@@ -70,20 +70,36 @@ const lastAiRef = useRef(null);      // the last AI message element
     };
   }, []);
 
-  useEffect(() => {
-const scroller = scrollRef.current;
-if (!scroller) return;
+    useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || messages.length === 0) return;
 
-const last = messages[messages.length - 1];
-if (!last) return;
- // If the last message is from the AI, scroll so its TOP is visible
-if (last.sender === "ai" && lastAiRef.current) {
-const top = lastAiRef.current.offsetTop ?? 0;
-scroller.scrollTo({ top: Math.max(top - 16, 0), behavior: "smooth" });
-} else {
-    // Otherwise (user message, typing indicator), keep the old behavior: bottom
-   scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-}  }, [messages, loading]);
+    const last = messages[messages.length - 1];
+
+    // helper: top of el relative to the scroller
+    const getTopWithinScroller = (el, container) => {
+      const elTop = el.getBoundingClientRect().top;
+      const scTop = container.getBoundingClientRect().top;
+      return elTop - scTop + container.scrollTop;
+    };
+
+    requestAnimationFrame(() => {
+      if (last.sender === "ai" && lastAiRef.current) {
+        const top = getTopWithinScroller(lastAiRef.current, scroller);
+        scroller.scrollTo({ top: Math.max(top - 16, 0), behavior: "instant" });
+
+        const ro = new ResizeObserver(() => {
+          const t = getTopWithinScroller(lastAiRef.current, scroller);
+          scroller.scrollTo({ top: Math.max(t - 16, 0) });
+        });
+        ro.observe(lastAiRef.current);
+        return () => ro.disconnect();
+      } else {
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+      }
+    });
+  }, [messages, loading]);
+
 
   useEffect(() => {
     inputRef.current?.focus();
