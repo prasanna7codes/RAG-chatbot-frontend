@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -412,35 +410,29 @@ export default function ChatWindow() {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center bg-voice-background text-voice-foreground rounded-2xl shadow-elegant overflow-hidden relative">
         
-        {/* Animated Background */}
-        <div className="absolute inset-0 bg-gradient-voice opacity-10 animate-pulse"></div>
-        
-        {/* Floating Particles */}
-        <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute top-1/4 left-1/4 w-2 h-2 bg-voice-primary rounded-full animate-float opacity-60"></div>
-          <div className="absolute top-3/4 right-1/4 w-1 h-1 bg-voice-secondary rounded-full animate-float opacity-40" style={{animationDelay: '1s'}}></div>
-          <div className="absolute top-1/2 left-3/4 w-1.5 h-1.5 bg-voice-primary rounded-full animate-float opacity-50" style={{animationDelay: '2s'}}></div>
-        </div>
+        {/* Subtle Background Gradient */}
+        <div className="absolute inset-0 bg-gradient-to-br from-voice-primary/5 to-voice-secondary/5"></div>
         
         {/* Header */}
         <div className="absolute top-6 left-0 right-0 text-center z-10">
-          <div className="flex items-center justify-center gap-2 mb-2">
-            <Sparkles className="w-6 h-6 text-voice-primary animate-pulse" />
-            <h2 className="text-2xl font-bold bg-gradient-voice bg-clip-text text-transparent">
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <div className="w-8 h-8 rounded-full bg-voice-primary/20 flex items-center justify-center">
+              <Mic className="w-4 h-4 text-voice-primary" />
+            </div>
+            <h2 className="text-2xl font-bold text-voice-foreground">
               {botName}
             </h2>
-            <Sparkles className="w-6 h-6 text-voice-primary animate-pulse" />
           </div>
-          <p className="text-sm text-voice-foreground/70 font-medium">Voice Conversation Mode</p>
+          <p className="text-sm text-voice-foreground/70 font-medium">Voice Conversation</p>
         </div>
 
         {/* Main Voice Interface */}
         <div className="flex flex-col items-center justify-center flex-1 z-10">
           {/* Microphone Button */}
-          <div className="relative">
-            {/* Outer ring for recording state */}
+          <div className="relative mb-8">
+            {/* Subtle pulse ring for recording */}
             {isRecording && (
-              <div className="absolute inset-0 rounded-full border-4 border-voice-secondary animate-ping"></div>
+              <div className="absolute inset-0 rounded-full bg-voice-secondary/20 animate-ping"></div>
             )}
             
             <Button
@@ -448,63 +440,68 @@ export default function ChatWindow() {
               disabled={botSpeaking}
               variant={
                 botSpeaking 
-                  ? "secondary" 
+                  ? "voice-disabled" 
                   : isRecording 
                     ? "voice-record" 
                     : "voice-idle"
               }
               onClick={toggleRecording}
-              className="relative z-10 shadow-voice hover:shadow-voice transform transition-all duration-300"
+              className="relative z-10 transform transition-all duration-300 hover:scale-105"
             >
-              {botSpeaking ? "🔒" : isRecording ? "🛑" : "🎤"}
+              {botSpeaking ? (
+                <Loader2 className="w-8 h-8 animate-spin" />
+              ) : isRecording ? (
+                <div className="w-8 h-8 rounded-full bg-current animate-pulse" />
+              ) : (
+                <Mic className="w-8 h-8" />
+              )}
             </Button>
           </div>
 
           {/* Status Display */}
-          <div className="mt-8 text-center max-w-sm">
+          <div className="text-center max-w-sm">
             {botSpeaking ? (
-              <div className="flex items-center justify-center gap-3 animate-fade-in">
-                <Loader2 className="w-6 h-6 animate-spin text-voice-primary" />
-                <span className="text-lg font-semibold text-voice-foreground">AI is speaking...</span>
+              <div className="space-y-2">
+                <div className="text-xl font-semibold text-voice-foreground">AI is speaking</div>
+                <div className="text-sm text-voice-foreground/70">Please wait for the response</div>
               </div>
             ) : isRecording ? (
-              <div className="animate-slide-up">
-                <div className="text-lg font-semibold text-voice-foreground mb-2">Listening...</div>
-                <div className="text-sm text-voice-foreground/70">Tap the button when you're done</div>
+              <div className="space-y-2">
+                <div className="text-xl font-semibold text-voice-foreground">Listening</div>
+                <div className="text-sm text-voice-foreground/70">Speak now, tap when finished</div>
               </div>
             ) : (
-              <div className="animate-slide-up">
-                <div className="text-lg font-semibold text-voice-foreground mb-2">Ready to chat</div>
-                <div className="text-sm text-voice-foreground/70">Tap the microphone to start talking</div>
+              <div className="space-y-2">
+                <div className="text-xl font-semibold text-voice-foreground">Ready to listen</div>
+                <div className="text-sm text-voice-foreground/70">Tap the microphone to start</div>
               </div>
             )}
           </div>
 
-          {/* Voice Visualization */}
+          {/* Simple Audio Visualization */}
           {isRecording && (
-            <div className="flex items-center gap-1 mt-6 animate-fade-in">
-              {[...Array(5)].map((_, i) => (
+            <div className="flex items-center gap-1 mt-6">
+              {[1, 2, 3, 4, 5].map((i) => (
                 <div
                   key={i}
-                  className="w-1 bg-voice-primary rounded-full animate-pulse"
+                  className="w-1 h-8 bg-voice-primary rounded-full opacity-60"
                   style={{
-                    height: Math.random() * 20 + 10 + 'px',
-                    animationDelay: i * 0.1 + 's',
-                    animationDuration: '0.5s'
+                    animation: `bounce-gentle 1s ease-in-out infinite`,
+                    animationDelay: `${i * 0.1}s`
                   }}
-                ></div>
+                />
               ))}
             </div>
           )}
         </div>
 
         {/* Back Button */}
-        <div className="absolute bottom-8 z-10">
+        <div className="absolute bottom-6 z-10">
           <Button
             variant="chat-outline"
-            size="voice-back"
+            size="default"
             onClick={() => setViewMode("text")}
-            className="backdrop-blur-sm border-voice-foreground/20 text-voice-foreground hover:bg-voice-foreground hover:text-voice-background"
+            className="px-6"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Chat
