@@ -409,7 +409,7 @@ export default function ChatWindow() {
   // Voice Mode UI
   if (viewMode === "voice") {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-voice-background text-voice-foreground rounded-2xl overflow-hidden relative border border-white/10">
+      <div className="w-full h-full flex flex-col items-center justify-center bg-voice-background text-voice-foreground rounded-2xl overflow-hidden relative">
         
         {/* Subtle Background Gradient */}
         <div className="absolute inset-0 bg-gradient-to-br from-voice-primary/3 to-voice-secondary/3"></div>
@@ -571,7 +571,8 @@ export default function ChatWindow() {
         <div className="p-6 space-y-6">
           {messages.length === 0 && (
             <div className="text-center py-12 animate-fade-in">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-primary flex items-center justify-center shadow-glow">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center shadow-glow
++                 bg-[linear-gradient(135deg,_hsl(var(--primary)),_hsl(292_84%_61%))]">
                 <Sparkles className="w-8 h-8 text-white" />
               </div>
               <h3 className="text-xl font-bold text-foreground mb-2">Welcome to {botName}!</h3>
@@ -591,7 +592,7 @@ export default function ChatWindow() {
               style={{ animationDelay: `${idx * 50}ms` }}
             >
               {msg.sender !== "user" && (
-                <div className="w-10 h-10 rounded-full bg-gradient-primary shadow-elegant flex items-center justify-center flex-shrink-0 mt-1">
+                <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
                   <Bot className="w-5 h-5 text-white" />
                 </div>
               )}
