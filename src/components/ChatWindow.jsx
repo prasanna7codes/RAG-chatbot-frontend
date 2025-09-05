@@ -60,57 +60,64 @@ export default function ChatWindow() {
   const streamDictRef = useRef(null);
 
   // WebAudio monitoring refs for silence detection
-  const audioMonitorRef = useRef(null); // for voice view
-  const audioMonitorDictRef = useRef(null); // for dictation
+  const audioMonitorRef = useRef(null); // stop function
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const dataArrayRef = useRef(null);
+
   const silenceTimeoutRef = useRef(null);
   const silenceTimeoutDictRef = useRef(null);
+
+  // continuous monitoring helpers & smoothing
+  const continuousRafRef = useRef(null);
+  const smoothedRmsRef = useRef(0);
+  const smoothedOrbRef = useRef(0);
+  const smoothedPeakHoldRef = useRef(0);
+
+  // playback refs
+  const currentAudioRef = useRef(null);
+  const currentAudioUrlRef = useRef(null);
+
+  // allow monitoring to interrupt TTS or be paused; we use modes instead of a single flag
+  const monitoringModeRef = useRef("normal"); // "normal" | "duringPlayback"
+  // normal threshold tuned to avoid tiny noise; duringPlayback threshold higher to avoid accidental interruptions
+  const BASE_VOICE_THRESHOLD = 0.02; // adjust if too sensitive
+  const PLAYBACK_INTERRUPT_THRESHOLD = 0.04; // user must be louder to interrupt during playback
+
+  // control variables for VAD debounce
+  const vadAboveStartRef = useRef(0);
+  const vadBelowStartRef = useRef(0);
+  const userSpeakingRef = useRef(false);
+  const lastUtteranceAtRef = useRef(0);
 
   // track last input type
   const [lastWasVoice, setLastWasVoice] = useState(false);
 
-  // ---------- NEW continuous-voice refs/state ----------
-  const continuousStreamRef = useRef(null); // single getUserMedia stream while in voice view
-  const continuousAudioCtxRef = useRef(null);
-  const continuousAnalyserRef = useRef(null);
-  const continuousDataArrayRef = useRef(null);
-  const continuousRafRef = useRef(null);
+  // orb UI level
+  const [voiceOrbLevel, setVoiceOrbLevel] = useState(0); // 0..1
 
-  const recordingSegmentRef = useRef(null); // MediaRecorder for speech segments
-  const recordingChunksRef = useRef([]); // chunk buffer for segment recordings
-
-  const [voiceOrbLevel, setVoiceOrbLevel] = useState(0); // 0..1 UI animation
-  const silenceTimerRef = useRef(null);
-
-  // track currently playing TTS (so we can stop/revoke)
-  const currentAudioRef = useRef(null);
-  const currentAudioUrlRef = useRef(null);
-
-  // tuning - tweak these if environment is noisy
-  const startThreshold = 0.025; // RMS threshold to consider "speech" (increase if noisy)
-  const playbackInterruptThreshold = 0.09; // while TTS playing, use higher threshold to avoid accidental interrupts
-  const startHoldMs = 150; // require RMS above startThreshold for this many ms before starting a segment
-  const silenceMs = 800; // stop segment after this many ms of silence
-  const smoothingAlpha = 0.2; // smoothing for orb level (0..1)
-
-  // helper moving-average state
-  const lastAboveTimeRef = useRef(0);
-  const smoothedRmsRef = useRef(0);
-
-  // ------------------------------------------------------------------
   function stripMarkdownForSpeech(s = "") {
     if (!s) return "";
+    // remove bullet markers at start of lines and heading markers
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
     s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
+    // remove leftover inline emphasis markers *like this*
     s = s.replace(/\*(.*?)\*/g, "$1");
+    // collapse multiple newlines and replace with single space for speech
     s = s.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
     return s;
   }
 
+  // preserve paragraphs/newlines, but strip bullet markers, headings, inline asterisks
   function cleanForDisplay(s = "") {
     if (!s) return "";
+    // remove leading bullet markers at line starts
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
+    // remove heading markers like "# " at line starts
     s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
+    // remove inline emphasis markers *like this* -> like this
     s = s.replace(/\*(.*?)\*/g, "$1");
+    // trim spaces on each line and remove trailing/leading whitespace
     s = s.split("\n").map((l) => l.trim()).join("\n").trim();
     return s;
   }
@@ -144,6 +151,7 @@ export default function ChatWindow() {
 
     const last = messages[messages.length - 1];
 
+    // helper: top of el relative to the scroller
     const getTopWithinScroller = (el, container) => {
       const elTop = el.getBoundingClientRect().top;
       const scTop = container.getBoundingClientRect().top;
@@ -172,44 +180,49 @@ export default function ChatWindow() {
     resizeTextarea();
   }, []);
 
-  // ===== interruptible TTS helpers (stopTTS + playTTS) =====
+  // ===== TTS playback helpers (interruptible) =====
   const stopTTS = () => {
     try {
       if (currentAudioRef.current) {
-        try {
-          currentAudioRef.current.pause();
-        } catch (e) {}
-        try {
-          currentAudioRef.current.src = "";
-        } catch (e) {}
+        try { currentAudioRef.current.pause(); } catch (e) {}
+        try { currentAudioRef.current.src = ""; } catch (e) {}
         currentAudioRef.current = null;
       }
       if (currentAudioUrlRef.current) {
-        try {
-          URL.revokeObjectURL(currentAudioUrlRef.current);
-        } catch (e) {}
+        try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
         currentAudioUrlRef.current = null;
       }
+    } catch (e) {
+      console.warn("stopTTS error", e);
     } finally {
       setBotSpeaking(false);
+      monitoringModeRef.current = "normal";
     }
   };
 
   const playTTS = async (text) => {
     try {
+      // Make sure any existing TTS is stopped
       stopTTS();
+
       setBotSpeaking(true);
-      const res = await fetch(
-        "https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text)
-      );
+      // set monitoring mode: during playback we still monitor for loud user speech but require higher threshold
+      monitoringModeRef.current = "duringPlayback";
+
+      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text));
       if (!res.ok) throw new Error("TTS fetch failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       currentAudioUrlRef.current = url;
       const audio = new Audio(url);
+      audio.autoplay = false;
+      audio.playsInline = true;
+      audio.volume = 1.0;
       currentAudioRef.current = audio;
 
       audio.onended = () => {
+        // restore monitoring mode
+        monitoringModeRef.current = "normal";
         setBotSpeaking(false);
         if (currentAudioRef.current === audio) currentAudioRef.current = null;
         if (currentAudioUrlRef.current) {
@@ -219,89 +232,192 @@ export default function ChatWindow() {
       };
 
       audio.onplay = () => setBotSpeaking(true);
-      await audio.play();
+
+      try {
+        const p = audio.play();
+        if (p && p instanceof Promise) {
+          await p.catch((err) => {
+            console.error("audio.play() rejected:", err);
+            monitoringModeRef.current = "normal";
+            setBotSpeaking(false);
+          });
+        }
+      } catch (err) {
+        console.error("TTS play failed:", err);
+        monitoringModeRef.current = "normal";
+        setBotSpeaking(false);
+      }
     } catch (e) {
-      console.error("TTS error:", e);
+      console.error("playTTS error:", e);
+      monitoringModeRef.current = "normal";
       setBotSpeaking(false);
     }
   };
 
   // ---------- Audio monitoring / silence detection helpers ----------
-  const startAudioMonitor = (stream, { onSoundLevel, rafInterval = 100 } = {}) => {
-    let audioCtx = null;
-    let analyser = null;
-    let dataArray = null;
-    let rafId = null;
+  // startAudioMonitor returns a stop function. onSoundLevel(level) called each tick.
+  const startAudioMonitorCore = async (stream) => {
     try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // create AudioContext and analyser
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
-      analyser = audioCtx.createAnalyser();
+
+      // set up analyser for time domain
+      const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048;
+      analyserRef.current = analyser;
       source.connect(analyser);
+
       const bufferLength = analyser.fftSize;
-      dataArray = new Uint8Array(bufferLength);
+      const dataArray = new Uint8Array(bufferLength);
+      dataArrayRef.current = dataArray;
+
+      const smoothingAlpha = 0.08; // for RMS smoothing
+      const speakHoldMs = 120; // need 120ms above threshold to count as start of speech
+      const silenceForUtteranceMs = 800; // 0.8s silence triggers STT send
 
       const poll = () => {
-        analyser.getByteTimeDomainData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          const v = (dataArray[i] - 128) / 128;
-          sum += v * v;
-        }
-        const rms = Math.sqrt(sum / dataArray.length);
-        onSoundLevel(rms);
-        rafId = requestAnimationFrame(poll);
-      };
-      rafId = requestAnimationFrame(poll);
-    } catch (e) {
-      console.warn("startAudioMonitor error", e);
-    }
+        try {
+          analyserRef.current.getByteTimeDomainData(dataArrayRef.current);
+          let sum = 0;
+          for (let i = 0; i < dataArrayRef.current.length; i++) {
+            const v = (dataArrayRef.current[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / dataArrayRef.current.length);
 
-    return () => {
-      try {
-        if (rafId) cancelAnimationFrame(rafId);
+          // smooth RMS (exponential)
+          smoothedRmsRef.current = smoothedRmsRef.current * (1 - smoothingAlpha) + rms * smoothingAlpha;
+
+          // update orb level (scaled)
+          const scaled = Math.max(0, Math.min(1, smoothedRmsRef.current * 12)); // empirical scale
+          smoothedOrbRef.current = smoothedOrbRef.current * 0.85 + scaled * 0.15;
+          setVoiceOrbLevel(smoothedOrbRef.current);
+
+          const now = performance.now();
+
+          // choose threshold depending on monitoring mode
+          const threshold = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_INTERRUPT_THRESHOLD : BASE_VOICE_THRESHOLD;
+
+          // VAD: start detection when RMS stays above threshold for speakHoldMs
+          if (smoothedRmsRef.current >= threshold) {
+            if (!vadAboveStartRef.current) vadAboveStartRef.current = now;
+            vadBelowStartRef.current = 0;
+            // if sustained above for hold time, mark user speaking
+            if (!userSpeakingRef.current && now - vadAboveStartRef.current > speakHoldMs) {
+              userSpeakingRef.current = true;
+              // start recording if not already
+              if (!isRecording) {
+                // if bot is speaking, this is user interrupt -> stop TTS and start recording
+                if (botSpeaking) {
+                  stopTTS();
+                }
+                startVoiceRecording(stream);
+              }
+            }
+          } else {
+            // below threshold
+            if (!vadBelowStartRef.current) vadBelowStartRef.current = now;
+            if (vadAboveStartRef.current) vadAboveStartRef.current = 0;
+            // if we are currently speaking and silence has lasted silenceForUtteranceMs -> finalize utterance
+            if (userSpeakingRef.current && now - vadBelowStartRef.current > silenceForUtteranceMs) {
+              // mark last utterance timestamp
+              lastUtteranceAtRef.current = now;
+              userSpeakingRef.current = false;
+              // stop recording and send STT
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+                try { mediaRecorderRef.current.stop(); } catch (e) { console.warn("stop recorder error", e); }
+              } else {
+                // if not using MediaRecorder for some reason, we can fallback to sending smaller buffer - but we'll rely on MediaRecorder
+              }
+            }
+          }
+
+        } catch (e) {
+          console.warn("monitor poll error", e);
+        }
+        continuousRafRef.current = requestAnimationFrame(poll);
+      };
+
+      continuousRafRef.current = requestAnimationFrame(poll);
+
+      // stop function
+      return () => {
         try {
-          if (analyser) analyser.disconnect();
-        } catch (ee) {}
-        try {
-          if (audioCtx) audioCtx.close();
-        } catch (ee) {}
-      } catch (e) {
-        // ignore
-      }
-    };
+          if (continuousRafRef.current) cancelAnimationFrame(continuousRafRef.current);
+          continuousRafRef.current = null;
+          if (analyserRef.current) try { analyserRef.current.disconnect(); } catch (e) {}
+          analyserRef.current = null;
+          if (audioCtxRef.current) try { audioCtxRef.current.close(); } catch (e) {}
+          audioCtxRef.current = null;
+        } catch (e) {
+          console.warn("stop monitor cleanup", e);
+        }
+      };
+    } catch (e) {
+      console.warn("startAudioMonitorCore error", e);
+      return () => {};
+    }
   };
 
-  // simple inline waveform SVG (compact, accessible)
-  const WaveformIcon = ({ className = "w-4 h-4", title = "waveform" }) => (
-    <svg
-      aria-hidden="true"
-      role="img"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <title>{title}</title>
-      <path d="M2 12h2v4h2v-8h2v12h2V6h2v16h2V4h2v10h2v-6h2" />
-    </svg>
-  );
-
-  // ---------- toggleRecording (voice-only) with silence auto-stop ----------
-  const toggleRecording = async () => {
-    if (isRecording) {
-      stopVoiceRecording();
-      return;
-    }
-
+  // ---------- continuous "always-on" mic for voice mode ----------
+  const startContinuousListening = async () => {
     try {
-      console.log("🎙️ Requesting microphone access for voice mode...");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // request mic with some helpful constraints
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 48000,
+        },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+      // Prepare MediaRecorder for capturing segments on-demand (we will create a fresh MediaRecorder when user starts speaking)
+      // But we still use MediaRecorder only when user speaking is detected. The analyser uses the stream for VAD.
+      // start monitor core
+      if (audioMonitorRef.current) {
+        audioMonitorRef.current();
+        audioMonitorRef.current = null;
+      }
+      audioMonitorRef.current = await startAudioMonitorCore(stream);
+    } catch (e) {
+      console.error("startContinuousListening error", e);
+      setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Microphone access denied or unavailable." }]);
+    }
+  };
 
+  const stopContinuousListening = () => {
+    try {
+      // stop monitor
+      if (audioMonitorRef.current) {
+        try { audioMonitorRef.current(); } catch (e) {}
+        audioMonitorRef.current = null;
+      }
+      // stop stream tracks
+      try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      streamRef.current = null;
+      // cleanup audioctx
+      try { if (audioCtxRef.current) audioCtxRef.current.close(); } catch (e) {}
+      audioCtxRef.current = null;
+      analyserRef.current = null;
+      dataArrayRef.current = null;
+      if (continuousRafRef.current) {
+        try { cancelAnimationFrame(continuousRafRef.current); } catch (e) {}
+        continuousRafRef.current = null;
+      }
+      smoothedRmsRef.current = 0;
+      setVoiceOrbLevel(0);
+    } catch (e) {
+      console.warn("stopContinuousListening error", e);
+    }
+  };
+
+  // ---------- start/stop a MediaRecorder when user starts speaking ----------
+  const startVoiceRecording = (stream) => {
+    try {
+      // Create a fresh MediaRecorder to capture user's utterance
       let options = { mimeType: "audio/webm;codecs=opus" };
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
         options = { mimeType: "audio/webm" };
@@ -309,29 +425,30 @@ export default function ChatWindow() {
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
         options = {};
       }
-
       audioChunksRef.current = [];
-      const mr = new MediaRecorder(stream, options);
+      // prefer using the already-open streamRef if available
+      const recStream = stream || streamRef.current;
+      if (!recStream) {
+        console.warn("no stream to record from");
+        return;
+      }
+      const mr = new MediaRecorder(recStream, options);
       mediaRecorderRef.current = mr;
 
       mr.onstart = () => {
-        console.log("Voice recording started");
         setIsRecording(true);
       };
       mr.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
       };
       mr.onstop = async () => {
-        console.log("Voice recording stopped (onstop)");
-        if (audioMonitorRef.current) {
-          audioMonitorRef.current();
-          audioMonitorRef.current = null;
-        }
+        setIsRecording(false);
+        // cleanup VAD timers
         if (silenceTimeoutRef.current) {
           clearTimeout(silenceTimeoutRef.current);
           silenceTimeoutRef.current = null;
         }
-
+        // form blob and send to your STT endpoint
         const blob = new Blob(audioChunksRef.current, { type: mr.mimeType || "audio/webm" });
         const formData = new FormData();
         formData.append("file", blob, "recording.webm");
@@ -345,6 +462,7 @@ export default function ChatWindow() {
           console.log("STT response (voice view):", data);
 
           if (data.text) {
+            // send voice transcript directly to bot (voice-only path)
             sendBotMessageDirect(data.text);
           } else {
             setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
@@ -354,45 +472,12 @@ export default function ChatWindow() {
           setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Error sending audio to server." }]);
         } finally {
           audioChunksRef.current = [];
-          try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
-          streamRef.current = null;
-          setIsRecording(false);
         }
       };
 
-      audioMonitorRef.current = startAudioMonitor(stream, {
-        onSoundLevel: (rms) => {
-          const threshold = 0.01;
-          if (rms > threshold) {
-            if (silenceTimeoutRef.current) {
-              clearTimeout(silenceTimeoutRef.current);
-              silenceTimeoutRef.current = null;
-            }
-            silenceTimeoutRef.current = setTimeout(() => {
-              try {
-                if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-                  mediaRecorderRef.current.stop();
-                } else {
-                  stopVoiceRecording();
-                }
-              } catch (e) {
-                stopVoiceRecording();
-              }
-            }, 1000);
-          }
-        },
-      });
-
       mr.start();
-    } catch (err) {
-      console.error("❌ getUserMedia failed for voice mode:", err);
-      let errorMsg = "⚠️ Microphone access denied or unavailable.";
-      if (err.name === "NotAllowedError") errorMsg = "⚠️ Permission denied. Please allow microphone access.";
-      else if (err.name === "NotFoundError") errorMsg = "⚠️ No microphone found. Please connect one.";
-      else if (err.name === "NotReadableError") errorMsg = "⚠️ Microphone is in use by another app.";
-      else if (err.name === "SecurityError") errorMsg = "⚠️ Access blocked due to insecure context (use HTTPS or localhost).";
-
-      setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
+    } catch (e) {
+      console.error("startVoiceRecording error", e);
     }
   };
 
@@ -405,191 +490,14 @@ export default function ChatWindow() {
       console.warn("stopVoiceRecording error", e);
     }
     try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
-    if (audioMonitorRef.current) { audioMonitorRef.current(); audioMonitorRef.current = null; }
-    if (silenceTimeoutRef.current) { clearTimeout(silenceTimeoutRef.current); silenceTimeoutRef.current = null; }
+    // do not null streamRef here — continuous listener controls it
     setIsRecording(false);
   };
 
-  // ===== NEW: Continuous voice mode (always-on mic while voice view) =====
-  const startSegmentRecording = () => {
-    try {
-      if (!continuousStreamRef.current) return;
-      stopTTS(); // prevent recording TTS playback
-
-      recordingChunksRef.current = [];
-      let options = { mimeType: "audio/webm;codecs=opus" };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: "audio/webm" };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) options = {};
-
-      const mr = new MediaRecorder(continuousStreamRef.current, options);
-      recordingSegmentRef.current = mr;
-
-      mr.ondataavailable = (e) => { if (e.data && e.data.size) recordingChunksRef.current.push(e.data); };
-      mr.onstart = () => { /* optional UI hook */ };
-      mr.onstop = async () => {
-        const blob = new Blob(recordingChunksRef.current, { type: mr.mimeType || "audio/webm" });
-        recordingChunksRef.current = [];
-
-        try {
-          const fd = new FormData();
-          fd.append("file", blob, "segment.webm");
-          const res = await fetch("https://trying-cloud-embedding-again.onrender.com/stt", { method: "POST", body: fd });
-          if (!res.ok) {
-            console.error("STT failed", await res.text());
-            setMessages(prev => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
-          } else {
-            const data = await res.json();
-            const text = data.text || "";
-            if (text.trim()) {
-              sendBotMessageDirect(text);
-            } else {
-              setMessages(prev => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
-            }
-          }
-        } catch (e) {
-          console.error("segment STT error", e);
-          setMessages(prev => [...prev, { sender: "ai", text: "⚠️ Error transcribing audio." }]);
-        } finally {
-          recordingSegmentRef.current = null;
-        }
-      };
-
-      mr.start();
-    } catch (e) {
-      console.error("startSegmentRecording error", e);
-    }
-  };
-
-  const stopSegmentRecording = () => {
-    try {
-      if (recordingSegmentRef.current && recordingSegmentRef.current.state !== "inactive") {
-        recordingSegmentRef.current.stop();
-      } else {
-        recordingSegmentRef.current = null;
-      }
-      if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-    } catch (e) {
-      console.warn("stopSegmentRecording error", e);
-      recordingSegmentRef.current = null;
-    }
-  };
-
-  const startContinuousVoice = async () => {
-    try {
-      if (continuousStreamRef.current) return;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      continuousStreamRef.current = stream;
-
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      source.connect(analyser);
-
-      const bufferLength = analyser.fftSize;
-      const dataArray = new Uint8Array(bufferLength);
-      continuousAudioCtxRef.current = audioCtx;
-      continuousAnalyserRef.current = analyser;
-      continuousDataArrayRef.current = dataArray;
-
-      let rafId = null;
-      const poll = () => {
-        try {
-          analyser.getByteTimeDomainData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            const v = (dataArray[i] - 128) / 128;
-            sum += v * v;
-          }
-          const rms = Math.sqrt(sum / dataArray.length);
-
-          // smoothing for orb value
-          smoothedRmsRef.current = smoothedRmsRef.current * (1 - smoothingAlpha) + rms * smoothingAlpha;
-          const scaled = Math.max(0, Math.min(1, smoothedRmsRef.current * 16));
-          setVoiceOrbLevel(prev => (prev * 0.7) + (scaled * 0.3));
-
-          // choose threshold depending on whether AI is speaking (raise threshold during playback)
-          const threshold = botSpeaking ? playbackInterruptThreshold : startThreshold;
-
-          const now = performance.now();
-
-          // start condition: must be above threshold continuously for startHoldMs
-          if (!recordingSegmentRef.current) {
-            if (smoothedRmsRef.current > threshold) {
-              if (lastAboveTimeRef.current === 0) lastAboveTimeRef.current = now;
-              // only start if stayed above for startHoldMs
-              if (now - lastAboveTimeRef.current >= startHoldMs) {
-                // start segment
-                startSegmentRecording();
-                lastAboveTimeRef.current = 0;
-                if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-              }
-            } else {
-              lastAboveTimeRef.current = 0;
-            }
-          } else {
-            // recording: if below threshold start silence timer to stop recording
-            if (smoothedRmsRef.current <= threshold) {
-              if (!silenceTimerRef.current) {
-                silenceTimerRef.current = setTimeout(() => {
-                  stopSegmentRecording();
-                }, silenceMs);
-              }
-            } else {
-              if (silenceTimerRef.current) {
-                clearTimeout(silenceTimerRef.current);
-                silenceTimerRef.current = null;
-              }
-            }
-            // Also: if TTS started unexpectedly, stop recording to avoid capturing playback
-            if (botSpeaking) {
-              // if bot started speaking, we should stop recording immediately
-              if (recordingSegmentRef.current) stopSegmentRecording();
-            }
-          }
-
-          // while botSpeaking: if rms crosses playbackInterruptThreshold, interrupt TTS
-          if (botSpeaking && smoothedRmsRef.current > playbackInterruptThreshold) {
-            stopTTS();
-          }
-        } catch (e) {
-          console.warn("continuous poll error", e);
-        }
-        rafId = requestAnimationFrame(poll);
-        continuousRafRef.current = rafId;
-      };
-      rafId = requestAnimationFrame(poll);
-    } catch (err) {
-      console.error("startContinuousVoice failed", err);
-      setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Microphone access denied or unavailable." }]);
-    }
-  };
-
-  const stopContinuousVoice = () => {
-    try {
-      if (continuousRafRef.current) {
-        try { cancelAnimationFrame(continuousRafRef.current); } catch (e) {}
-        continuousRafRef.current = null;
-      }
-      try { if (recordingSegmentRef.current) stopSegmentRecording(); } catch (e) {}
-      try { continuousStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
-      continuousStreamRef.current = null;
-      try { continuousAudioCtxRef.current?.close(); } catch (e) {}
-      continuousAudioCtxRef.current = null;
-      continuousAnalyserRef.current = null;
-      continuousDataArrayRef.current = null;
-      lastAboveTimeRef.current = 0;
-      smoothedRmsRef.current = 0;
-      if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
-      setVoiceOrbLevel(0);
-    } catch (e) {
-      console.warn("stopContinuousVoice error", e);
-    }
-  };
-
-  // ===== NEW dictation and legacy dictation left as-is (unchanged) =====
+  // ===== NEW: dictation recording (transcribe into input box only) with silence auto-stop =====
   const toggleDictation = async () => {
     if (isDictating) {
+      // stop dictation
       stopDictationRecording();
       return;
     }
@@ -613,6 +521,7 @@ export default function ChatWindow() {
         if (e.data && e.data.size > 0) audioChunksDictRef.current.push(e.data);
       };
       mr.onstop = async () => {
+        // cleanup monitor
         if (audioMonitorDictRef.current) {
           audioMonitorDictRef.current();
           audioMonitorDictRef.current = null;
@@ -632,6 +541,7 @@ export default function ChatWindow() {
           const data = await res.json();
 
           if (data.text) {
+            // append transcript into textarea for editing
             setInput((prev) => (prev && prev.trim() ? prev + " " + data.text : data.text));
             requestAnimationFrame(resizeTextarea);
             textareaRef.current?.focus();
@@ -650,28 +560,64 @@ export default function ChatWindow() {
         }
       };
 
-      audioMonitorDictRef.current = startAudioMonitor(stream, {
-        onSoundLevel: (rms) => {
+      // start silence monitor for dictation
+      // reuse simple approach: auto-stop when 1s of silence after speech
+      const dictAnalyzer = await (async () => {
+        try {
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const source = audioCtx.createMediaStreamSource(stream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 2048;
+          source.connect(analyser);
+          const bufferLength = analyser.fftSize;
+          const dataArray = new Uint8Array(bufferLength);
+
+          let raf = null;
           const threshold = 0.01;
-          if (rms > threshold) {
-            if (silenceTimeoutDictRef.current) {
-              clearTimeout(silenceTimeoutDictRef.current);
-              silenceTimeoutDictRef.current = null;
+          const smoothing = 0.05;
+          let smooth = 0;
+
+          const poll = () => {
+            analyser.getByteTimeDomainData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              const v = (dataArray[i] - 128) / 128;
+              sum += v * v;
             }
-            silenceTimeoutDictRef.current = setTimeout(() => {
-              try {
-                if (mediaRecorderDictRef.current && mediaRecorderDictRef.current.state !== "inactive") {
-                  mediaRecorderDictRef.current.stop();
-                } else {
+            const rms = Math.sqrt(sum / dataArray.length);
+            smooth = smooth * (1 - smoothing) + rms * smoothing;
+            if (smooth > threshold) {
+              if (silenceTimeoutDictRef.current) {
+                clearTimeout(silenceTimeoutDictRef.current);
+                silenceTimeoutDictRef.current = null;
+              }
+              silenceTimeoutDictRef.current = setTimeout(() => {
+                try {
+                  if (mediaRecorderDictRef.current && mediaRecorderDictRef.current.state !== "inactive") {
+                    mediaRecorderDictRef.current.stop();
+                  } else {
+                    stopDictationRecording();
+                  }
+                } catch (e) {
                   stopDictationRecording();
                 }
-              } catch (e) {
-                stopDictationRecording();
-              }
-            }, 1000);
-          }
-        },
-      });
+              }, 1000);
+            }
+            raf = requestAnimationFrame(poll);
+          };
+          raf = requestAnimationFrame(poll);
+
+          return () => {
+            try { if (raf) cancelAnimationFrame(raf); } catch (e) {}
+            try { analyser.disconnect(); } catch (e) {}
+            try { audioCtx.close(); } catch (e) {}
+          };
+        } catch (e) {
+          return () => {};
+        }
+      })();
+
+      audioMonitorDictRef.current = dictAnalyzer;
 
       mr.start();
     } catch (err) {
@@ -714,8 +660,11 @@ export default function ChatWindow() {
     if (!input.trim() || !apiKey || !clientDomain) return;
 
     const text = input.trim();
+
+    // typed input -> show bubble
     setMessages((prev) => [...prev, { sender: "user", text }]);
-    setLastWasVoice(false);
+    setLastWasVoice(false); // mark explicitly
+
     setLoading(true);
 
     try {
@@ -735,8 +684,15 @@ export default function ChatWindow() {
       const data = await res.json();
       const rawAnswer = data.answer || "Sorry, I could not find an answer.";
       const displayText = cleanForDisplay(rawAnswer);
-      const aiMessage = { sender: "ai", text: displayText };
+      const aiMessage = {
+        sender: "ai",
+        text: displayText,
+      };
+
+      // typed input -> show chatbot bubble
       setMessages((prev) => [...prev, aiMessage]);
+
+      // 🚫 no TTS for text input
     } catch (e) {
       setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
     }
@@ -750,7 +706,8 @@ export default function ChatWindow() {
   const sendBotMessageDirect = async (voiceText) => {
     if (!voiceText || !apiKey || !clientDomain) return;
 
-    setLastWasVoice(true);
+    setLastWasVoice(true); // voice input
+
     setLoading(true);
 
     try {
@@ -770,8 +727,10 @@ export default function ChatWindow() {
       const data = await res.json();
       const aiMessage = data.answer || "Sorry, I could not find an answer.";
 
-      // play TTS reply (interruptible)
+      // 🚫 don't show bubbles for voice input
+      // 🔊 just play TTS
       playTTS(stripMarkdownForSpeech(aiMessage));
+
     } catch (e) {
       console.error("Voice flow error:", e);
     }
@@ -797,6 +756,7 @@ export default function ChatWindow() {
       if (!res.ok) throw new Error("Unable to start live chat");
       const data = await res.json();
 
+      // debug JWT
       try {
         const payload = JSON.parse(atob(data.supabase_jwt.split(".")[1]));
         console.log("VISITOR JWT payload (widget):", payload);
@@ -814,6 +774,7 @@ export default function ChatWindow() {
       supaRef.current = supa;
       supa.realtime.setAuth(data.supabase_jwt);
 
+      // initial history
       try {
         const { data: history, error: histErr } = await supa
           .from("live_messages")
@@ -829,6 +790,7 @@ export default function ChatWindow() {
         console.warn("History fetch exception:", e);
       }
 
+      // realtime subscribe
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
         .on(
@@ -882,20 +844,43 @@ export default function ChatWindow() {
     return sendBotMessage();
   };
 
-  // Start/stop continuous voice monitoring when entering/exiting voice view
+  // When switching into voice view, start continuous listening automatically
   useEffect(() => {
     if (viewMode === "voice") {
-      startContinuousVoice();
+      // initialize continuous listening
+      startContinuousListening();
     } else {
-      stopContinuousVoice();
+      // stop continuous listener when leaving voice view
+      stopContinuousListening();
+      // also stop any TTS playback
       stopTTS();
     }
+
+    // cleanup on unmount
     return () => {
-      stopContinuousVoice();
+      stopContinuousListening();
       stopTTS();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, botSpeaking]);
+  }, [viewMode]);
+
+  // simple inline waveform SVG (compact, accessible)
+  const WaveformIcon = ({ className = "w-4 h-4", title = "waveform" }) => (
+    <svg
+      aria-hidden="true"
+      role="img"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <title>{title}</title>
+      <path d="M2 12h2v4h2v-8h2v12h2V6h2v16h2V4h2v10h2v-6h2" />
+    </svg>
+  );
 
   // Voice Mode UI
   if (viewMode === "voice") {
@@ -917,96 +902,71 @@ export default function ChatWindow() {
 
         {/* Main Voice Interface */}
         <div className="flex flex-col items-center justify-center flex-1 z-10">
-          {/* Voice Orb & Status */}
+          {/* CHATGPT-like orb */}
           <div className="mb-6">
-            {/* Voice Orb */}
             <div
               aria-hidden
-              className="relative flex items-center justify-center rounded-full"
+              className="relative w-32 h-32 rounded-full flex items-center justify-center"
               style={{
-                width: 160,
-                height: 160,
-                background: "radial-gradient(circle at 30% 20%, rgba(79,70,229,0.06), transparent 35%)",
-                boxShadow: "0 12px 40px rgba(0,0,0,0.12)",
+                // animated gradient + scale based on orb level
+                background: `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.35 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.2 + voiceOrbLevel * 0.3}), transparent 40%)`,
+                boxShadow: `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
+                transform: `scale(${1 + voiceOrbLevel * 0.06})`,
+                transition: "transform 120ms linear, box-shadow 160ms linear",
               }}
             >
-              {/* inner animated circle */}
+              {/* inner animated ripples */}
               <div
                 style={{
-                  width: 96,
-                  height: 96,
-                  borderRadius: 9999,
-                  background: "linear-gradient(135deg,#7c3aed,#4f46e5)",
-                  transform: `scale(${0.85 + voiceOrbLevel * 0.5})`,
-                  transition: "transform 100ms linear",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center"
+                  position: "absolute",
+                  width: `${60 + voiceOrbLevel * 30}px`,
+                  height: `${60 + voiceOrbLevel * 30}px`,
+                  borderRadius: "50%",
+                  opacity: 0.08 + voiceOrbLevel * 0.5,
+                  transform: `translateZ(0)`,
+                  transition: "width 160ms linear, height 160ms linear, opacity 160ms linear",
+                  background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
                 }}
-              >
+              />
+              <div className="relative z-10 w-20 h-20 rounded-full flex items-center justify-center" style={{ background: "linear-gradient(135deg,#6d28d9,#4f46e5)", boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)" }}>
                 <Mic className="w-6 h-6 text-white" />
-              </div>
-
-              {/* animated rings */}
-              <svg style={{ position: "absolute", inset: 0, pointerEvents: "none" }} viewBox="0 0 160 160" width="160" height="160">
-                <circle cx="80" cy="80" r={54 + voiceOrbLevel * 12} fill="none" stroke="rgba(79,70,229,0.08)" strokeWidth={2 + voiceOrbLevel * 2} />
-                <circle cx="80" cy="80" r={40 + voiceOrbLevel * 8} fill="none" stroke="rgba(79,70,229,0.06)" strokeWidth={1 + voiceOrbLevel * 1.6} />
-              </svg>
-
-              {/* flowing dots (simple) */}
-              <div style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }}>
-                <div style={{
-                  position: "absolute",
-                  left: `${50 - voiceOrbLevel * 6}%`,
-                  top: `${40 - voiceOrbLevel * 6}%`,
-                  width: 8,
-                  height: 8,
-                  borderRadius: 999,
-                  background: "rgba(255,255,255,0.85)",
-                  transform: `translate(-50%,-50%) scale(${0.9 + voiceOrbLevel * 0.6})`,
-                  transition: "all 120ms linear",
-                  filter: "blur(0.2px)"
-                }} />
-                <div style={{
-                  position: "absolute",
-                  left: `${60 + voiceOrbLevel * 6}%`,
-                  top: `${62 + voiceOrbLevel * 6}%`,
-                  width: 6,
-                  height: 6,
-                  borderRadius: 999,
-                  background: "rgba(255,255,255,0.6)",
-                  transform: `translate(-50%,-50%) scale(${0.7 + voiceOrbLevel * 0.4})`,
-                  transition: "all 140ms linear",
-                }} />
               </div>
             </div>
           </div>
 
-          {/* Status Display */}
+          {/* Instruction + status */}
           <div className="text-center max-w-sm">
             {botSpeaking ? (
               <div className="space-y-2">
                 <div className="text-xl font-semibold text-voice-foreground">AI is speaking</div>
-                <div className="text-sm text-voice-foreground/70">Say anything loudly to interrupt</div>
+                <div className="text-sm text-voice-foreground/70">You can interrupt by speaking.</div>
               </div>
-            ) : recordingSegmentRef.current ? (
+            ) : isRecording ? (
               <div className="space-y-2">
-                <div className="text-xl font-semibold text-voice-foreground">Recording…</div>
-                <div className="text-sm text-voice-foreground/70">Speak now — will stop after silence</div>
+                <div className="text-xl font-semibold text-voice-foreground">Listening</div>
+                <div className="text-sm text-voice-foreground/70">Speak now — will stop automatically after 0.8s of silence</div>
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="text-xl font-semibold text-voice-foreground">Listening</div>
-                <div className="text-sm text-voice-foreground/70">Speak — I’ll respond when you stop</div>
+                <div className="text-xl font-semibold text-voice-foreground">Ready to listen</div>
+                <div className="text-sm text-voice-foreground/70">Speak at any time — the mic is always on</div>
               </div>
             )}
           </div>
 
           {/* Simple Audio Visualization */}
-          {(recordingSegmentRef.current || botSpeaking) && (
+          {(isRecording || botSpeaking) && (
             <div className="flex items-center gap-1 mt-6">
               {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className={`w-1 h-8 rounded-full opacity-60 ${botSpeaking ? "bg-voice-secondary" : "bg-voice-primary"}`} style={{ animation: `bounce-gentle 1s ease-in-out infinite`, animationDelay: `${i * 0.08}s` }} />
+                <div
+                  key={i}
+                  className={`w-2 rounded-full opacity-80`}
+                  style={{
+                    height: `${10 + voiceOrbLevel * 40 * (i / 5)}px`,
+                    background: botSpeaking ? "linear-gradient(180deg,#eab308,#f97316)" : "linear-gradient(180deg,#7c3aed,#4f46e5)",
+                    transition: "height 120ms linear",
+                  }}
+                />
               ))}
             </div>
           )}
@@ -1023,7 +983,7 @@ export default function ChatWindow() {
     );
   }
 
-  // Text Mode UI (unchanged, kept full)
+  // Text Mode UI
   return (
     <Card className="w-full h-full flex flex-col min-h-0 overflow-hidden shadow-elegant bg-gradient-subtle border-0">
       {/* Modern Header */}
@@ -1137,7 +1097,7 @@ export default function ChatWindow() {
             <Send className="w-4 h-4" />
           </button>
 
-          {/* DICTATE BUTTON */}
+          {/* DICTATE BUTTON: different symbol (Sparkles) so it's visually distinct */}
           <button
             onClick={toggleDictation}
             title={isDictating ? "Stop dictation" : "Dictate (adds text to input)"}
@@ -1150,7 +1110,7 @@ export default function ChatWindow() {
             </span>
           </button>
 
-          {/* VOICE-ONLY MODE BUTTON */}
+          {/* VOICE-ONLY MODE BUTTON: distinct round ChatGPT-like UI */}
           <button
             onClick={() => setViewMode("voice")}
             title="Open voice-only mode"
