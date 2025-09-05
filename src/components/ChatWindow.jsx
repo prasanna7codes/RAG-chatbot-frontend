@@ -68,6 +68,20 @@ export default function ChatWindow() {
   // track last input type
   const [lastWasVoice, setLastWasVoice] = useState(false);
 
+
+  function stripMarkdownForSpeech(s = "") {
+  if (!s) return "";
+  // remove bullet markers at start of lines and heading markers
+  s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
+  s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
+  // remove leftover inline emphasis markers *like this*
+  s = s.replace(/\*(.*?)\*/g, "$1");
+  // collapse multiple newlines and replace with single space for speech
+  s = s.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
+  return s;
+}
+
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setApiKey(params.get("apiKey") || "");
@@ -525,7 +539,8 @@ export default function ChatWindow() {
 
       // 🚫 don't show bubbles for voice input
       // 🔊 just play TTS
-      playTTS(aiMessage);
+      playTTS(stripMarkdownForSpeech(aiMessage));
+
     } catch (e) {
       console.error("Voice flow error:", e);
     }
