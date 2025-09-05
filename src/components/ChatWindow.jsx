@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+// removed unused Input import since we use a textarea now
 import { Button } from "@/components/ui/button";
 import { Loader2, Bot, User, PhoneCall, Mic, Send, ArrowLeft, Sparkles } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
@@ -33,7 +33,7 @@ export default function ChatWindow() {
   const supaRef = useRef(null);
   const channelRef = useRef(null);
   const chatEndRef = useRef(null);
-  const inputRef = useRef(null);
+  const textareaRef = useRef(null); // replaced inputRef with textareaRef
 
   const scrollRef = useRef(null);      // the scrollable container
   const lastAiRef = useRef(null);      // the last AI message element
@@ -107,7 +107,8 @@ export default function ChatWindow() {
   }, [messages, loading]);
 
   useEffect(() => {
-    inputRef.current?.focus();
+    textareaRef.current?.focus();
+    resizeTextarea();
   }, []);
 
   // ===== helper: play bot reply with existing TTS =====
@@ -289,7 +290,9 @@ export default function ChatWindow() {
           if (data.text) {
             // put transcript in input box so user can edit before sending
             setInput((prev) => (prev && prev.trim() ? prev + " " + data.text : data.text));
-            inputRef.current?.focus();
+            // resize textarea to fit appended text
+            requestAnimationFrame(resizeTextarea);
+            textareaRef.current?.focus();
             // mark as voice-originated but visible text
             setLastWasVoice(true);
           } else {
@@ -316,6 +319,16 @@ export default function ChatWindow() {
 
       setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
     }
+  };
+
+  // ---------- textarea auto-resize helper ----------
+  const resizeTextarea = () => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    // limit max height for layout, but allow plenty for long transcripts
+    const max = 300; // px
+    ta.style.height = Math.min(ta.scrollHeight, max) + "px";
   };
 
   // ===== RAG flow =====
@@ -359,8 +372,9 @@ export default function ChatWindow() {
     }
 
     setInput("");
+    resizeTextarea();
     setLoading(false);
-    inputRef.current?.focus();
+    textareaRef.current?.focus();
   };
 
   const sendBotMessageDirect = async (voiceText) => {
@@ -496,6 +510,7 @@ export default function ChatWindow() {
 
     setMessages((prev) => [...prev, { sender: "user", text }]);
     setInput("");
+    resizeTextarea();
 
     const { error } = await supaRef.current
       .from("live_messages")
@@ -753,19 +768,20 @@ export default function ChatWindow() {
 
       {/* Modern Input Area */}
       <div className="p-6 border-t border-border/50 bg-gradient-subtle backdrop-blur-sm">
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-end">
           <div className="flex-1 relative">
-            <Input
-              ref={inputRef}
+            <textarea
+              ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => { setInput(e.target.value); resizeTextarea(); }}
               placeholder={
                 liveMode 
                   ? "Type your message to the agent..." 
                   : "Ask me anything about this company..."
               }
-              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && onSend()}
-              className="pr-12 h-12 bg-white/80 backdrop-blur-sm border-border/50 focus:border-primary/50 focus:ring-primary/20 rounded-xl shadow-sm transition-all duration-200"
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+              className="w-full resize-none rounded-xl p-3 bg-white/90 border-border/50 focus:border-primary/50 focus:ring-primary/20 shadow-sm transition-all duration-200 text-sm leading-relaxed"
+              style={{ minHeight: 56, maxHeight: 300, overflow: "auto" }}
             />
           </div>
           
@@ -780,33 +796,34 @@ export default function ChatWindow() {
           </Button>
           
           {/* DICTATE BUTTON: new — toggles dictation and appends transcript into input */}
-          <Button 
-            variant={isDictating ? "destructive" : "voice"} 
-            size="default"
+          <button
             onClick={toggleDictation}
-            className={`h-12 px-3 rounded-xl ${isDictating ? "bg-red-500" : ""}`}
             title={isDictating ? "Stop dictation" : "Dictate (adds text to input)"}
+            className={`flex items-center justify-center h-12 px-3 rounded-lg border ${isDictating ? "bg-amber-600 text-white border-amber-600" : "bg-amber-100 text-amber-800 border-amber-200"} hover:scale-105 transition-transform`}
+            style={{ minWidth: 44 }}
           >
-            <Mic className="w-4 h-4" />
-          </Button>
+            <span className="relative flex items-center justify-center">
+              <Mic className="w-4 h-4" />
+              {isDictating && <span className="absolute -right-1 -top-1 w-2 h-2 rounded-full bg-white/90 animate-pulse" />}
+            </span>
+          </button>
 
           {/* EXISTING: switch to voice-only view */}
-          <Button 
-            variant="voice" 
-            size="default"
-            onClick={() => setViewMode("voice")}
-            className="h-12 px-4 rounded-xl"
+          <button 
+            onClick={() => setViewMode("voice")} 
             title="Open voice-only mode"
+            className="flex items-center justify-center h-12 w-12 rounded-full bg-voice-primary text-white hover:scale-105 transition-transform"
+            style={{ boxShadow: "0 6px 18px rgba(79,70,229,0.12)" }}
           >
-            <Mic className="w-4 h-4" />
-          </Button>
+            <Mic className="w-5 h-5" />
+          </button>
         </div>
         
         <div className="mt-3 text-xs text-center text-muted-foreground">
           {liveMode ? (
             "Connected to live support"
           ) : (
-            `Powered by ${botName} • Click the mic for voice chat or the dictation mic to speak into the input`
+            `Powered by ${botName} • Click the round mic for voice chat or the orange mic to dictate into the input`
           )}
         </div>
       </div>
