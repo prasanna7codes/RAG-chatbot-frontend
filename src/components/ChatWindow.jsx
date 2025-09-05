@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef,useLayoutEffect } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -35,14 +35,20 @@ export default function ChatWindow() {
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
-const scrollRef = useRef(null);      // the scrollable container
-const lastAiRef = useRef(null);      // the last AI message element
+  const scrollRef = useRef(null);      // the scrollable container
+  const lastAiRef = useRef(null);      // the last AI message element
 
-  // voice
+  // voice (existing full voice view)
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
+
+  // NEW: dictation (for the input box)
+  const [isDictating, setIsDictating] = useState(false);
+  const mediaRecorderDictRef = useRef(null);
+  const audioChunksDictRef = useRef([]);
+  const streamDictRef = useRef(null);
 
   // track last input type
   const [lastWasVoice, setLastWasVoice] = useState(false);
@@ -70,7 +76,7 @@ const lastAiRef = useRef(null);      // the last AI message element
     };
   }, []);
 
-    useLayoutEffect(() => {
+  useLayoutEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller || messages.length === 0) return;
 
@@ -100,12 +106,11 @@ const lastAiRef = useRef(null);      // the last AI message element
     });
   }, [messages, loading]);
 
-
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // ===== helper: play bot reply with ElevenLabs TTS =====
+  // ===== helper: play bot reply with existing TTS =====
   const playTTS = async (text) => {
     try {
       setBotSpeaking(true); // show "AI is speaking..."
@@ -127,7 +132,7 @@ const lastAiRef = useRef(null);      // the last AI message element
     }
   };
 
-  // ===== voice recording (STT ) with device logging =====
+  // ===== voice recording (STT ) with device logging (existing voice view) =====
   const toggleRecording = async () => {
     if (isRecording) {
       // Stop recording
@@ -230,6 +235,84 @@ const lastAiRef = useRef(null);      // the last AI message element
       } else if (err.name === "SecurityError") {
         errorMsg = "⚠️ Access blocked due to insecure context (use HTTPS or localhost).";
       }
+
+      setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
+    }
+  };
+
+  // ===== NEW: dictation recording (transcribe into input box only) =====
+  const toggleDictation = async () => {
+    if (isDictating) {
+      // stop dictation
+      try {
+        mediaRecorderDictRef.current?.stop();
+        streamDictRef.current?.getTracks().forEach((t) => t.stop());
+      } catch (e) {
+        console.warn("stop dictation error", e);
+      }
+      setIsDictating(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamDictRef.current = stream;
+
+      // best-effort mime type
+      let options = { mimeType: "audio/webm;codecs=opus" };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: "audio/webm" };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) options = {};
+
+      audioChunksDictRef.current = [];
+      const mr = new MediaRecorder(stream, options);
+      mediaRecorderDictRef.current = mr;
+
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksDictRef.current.push(e.data);
+      };
+
+      mr.onstart = () => {
+        setIsDictating(true);
+      };
+
+      mr.onstop = async () => {
+        const blob = new Blob(audioChunksDictRef.current, { type: mr.mimeType || "audio/webm" });
+        const fd = new FormData();
+        fd.append("file", blob, "dictation.webm");
+
+        try {
+          // Use same STT endpoint your app already uses
+          const res = await fetch("https://trying-cloud-embedding-again.onrender.com/stt", { method: "POST", body: fd });
+          if (!res.ok) throw new Error("Transcription failed");
+          const data = await res.json();
+
+          if (data.text) {
+            // put transcript in input box so user can edit before sending
+            setInput((prev) => (prev && prev.trim() ? prev + " " + data.text : data.text));
+            inputRef.current?.focus();
+            // mark as voice-originated but visible text
+            setLastWasVoice(true);
+          } else {
+            setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
+          }
+        } catch (err) {
+          console.error("Dictation STT error:", err);
+          setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Error transcribing dictation." }]);
+        } finally {
+          audioChunksDictRef.current = [];
+          try { streamDictRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
+          setIsDictating(false);
+        }
+      };
+
+      mr.start();
+    } catch (err) {
+      console.error("Dictation start failed:", err);
+      let errorMsg = "⚠️ Microphone access denied or unavailable.";
+      if (err.name === "NotAllowedError") errorMsg = "⚠️ Permission denied. Please allow microphone access.";
+      else if (err.name === "NotFoundError") errorMsg = "⚠️ No microphone found. Please connect one.";
+      else if (err.name === "NotReadableError") errorMsg = "⚠️ Microphone is in use by another app.";
+      else if (err.name === "SecurityError") errorMsg = "⚠️ Access blocked due to insecure context (use HTTPS or localhost).";
 
       setMessages((prev) => [...prev, { sender: "ai", text: errorMsg }]);
     }
@@ -696,11 +779,24 @@ const lastAiRef = useRef(null);      // the last AI message element
             <Send className="w-4 h-4" />
           </Button>
           
+          {/* DICTATE BUTTON: new — toggles dictation and appends transcript into input */}
+          <Button 
+            variant={isDictating ? "destructive" : "voice"} 
+            size="default"
+            onClick={toggleDictation}
+            className={`h-12 px-3 rounded-xl ${isDictating ? "bg-red-500" : ""}`}
+            title={isDictating ? "Stop dictation" : "Dictate (adds text to input)"}
+          >
+            <Mic className="w-4 h-4" />
+          </Button>
+
+          {/* EXISTING: switch to voice-only view */}
           <Button 
             variant="voice" 
             size="default"
             onClick={() => setViewMode("voice")}
             className="h-12 px-4 rounded-xl"
+            title="Open voice-only mode"
           >
             <Mic className="w-4 h-4" />
           </Button>
@@ -710,7 +806,7 @@ const lastAiRef = useRef(null);      // the last AI message element
           {liveMode ? (
             "Connected to live support"
           ) : (
-            `Powered by ${botName} • Click the mic for voice chat`
+            `Powered by ${botName} • Click the mic for voice chat or the dictation mic to speak into the input`
           )}
         </div>
       </div>
