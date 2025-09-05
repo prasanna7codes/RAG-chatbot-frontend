@@ -73,6 +73,7 @@ export default function ChatWindow() {
   const continuousAudioCtxRef = useRef(null);
   const continuousAnalyserRef = useRef(null);
   const continuousDataArrayRef = useRef(null);
+  const continuousRafRef = useRef(null);
 
   const recordingSegmentRef = useRef(null); // MediaRecorder for speech segments
   const recordingChunksRef = useRef([]); // chunk buffer for segment recordings
@@ -84,33 +85,32 @@ export default function ChatWindow() {
   const currentAudioRef = useRef(null);
   const currentAudioUrlRef = useRef(null);
 
-  // tuning
-  const speechThreshold = 0.01; // RMS threshold for speech detection
-  const silenceMs = 800; // stop segment after 800ms silence
+  // tuning - tweak these if environment is noisy
+  const startThreshold = 0.025; // RMS threshold to consider "speech" (increase if noisy)
+  const playbackInterruptThreshold = 0.09; // while TTS playing, use higher threshold to avoid accidental interrupts
+  const startHoldMs = 150; // require RMS above startThreshold for this many ms before starting a segment
+  const silenceMs = 800; // stop segment after this many ms of silence
+  const smoothingAlpha = 0.2; // smoothing for orb level (0..1)
+
+  // helper moving-average state
+  const lastAboveTimeRef = useRef(0);
+  const smoothedRmsRef = useRef(0);
 
   // ------------------------------------------------------------------
   function stripMarkdownForSpeech(s = "") {
     if (!s) return "";
-    // remove bullet markers at start of lines and heading markers
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
     s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
-    // remove leftover inline emphasis markers *like this*
     s = s.replace(/\*(.*?)\*/g, "$1");
-    // collapse multiple newlines and replace with single space for speech
     s = s.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
     return s;
   }
 
-  // preserve paragraphs/newlines, but strip bullet markers, headings, inline asterisks
   function cleanForDisplay(s = "") {
     if (!s) return "";
-    // remove leading bullet markers at line starts
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
-    // remove heading markers like "# " at line starts
     s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
-    // remove inline emphasis markers *like this* -> like this
     s = s.replace(/\*(.*?)\*/g, "$1");
-    // trim spaces on each line and remove trailing/leading whitespace
     s = s.split("\n").map((l) => l.trim()).join("\n").trim();
     return s;
   }
@@ -144,7 +144,6 @@ export default function ChatWindow() {
 
     const last = messages[messages.length - 1];
 
-    // helper: top of el relative to the scroller
     const getTopWithinScroller = (el, container) => {
       const elTop = el.getBoundingClientRect().top;
       const scTop = container.getBoundingClientRect().top;
@@ -228,9 +227,7 @@ export default function ChatWindow() {
   };
 
   // ---------- Audio monitoring / silence detection helpers ----------
-  // startAudioMonitor returns a stop function. onSoundLevel(level) called each tick.
   const startAudioMonitor = (stream, { onSoundLevel, rafInterval = 100 } = {}) => {
-    // create AudioContext and analyser
     let audioCtx = null;
     let analyser = null;
     let dataArray = null;
@@ -246,10 +243,9 @@ export default function ChatWindow() {
 
       const poll = () => {
         analyser.getByteTimeDomainData(dataArray);
-        // compute RMS
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) {
-          const v = (dataArray[i] - 128) / 128; // -1..1
+          const v = (dataArray[i] - 128) / 128;
           sum += v * v;
         }
         const rms = Math.sqrt(sum / dataArray.length);
@@ -297,7 +293,6 @@ export default function ChatWindow() {
   // ---------- toggleRecording (voice-only) with silence auto-stop ----------
   const toggleRecording = async () => {
     if (isRecording) {
-      // Stop recording manually
       stopVoiceRecording();
       return;
     }
@@ -307,7 +302,6 @@ export default function ChatWindow() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      // Setup media recorder
       let options = { mimeType: "audio/webm;codecs=opus" };
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
         options = { mimeType: "audio/webm" };
@@ -329,7 +323,6 @@ export default function ChatWindow() {
       };
       mr.onstop = async () => {
         console.log("Voice recording stopped (onstop)");
-        // cleanup monitor
         if (audioMonitorRef.current) {
           audioMonitorRef.current();
           audioMonitorRef.current = null;
@@ -352,7 +345,6 @@ export default function ChatWindow() {
           console.log("STT response (voice view):", data);
 
           if (data.text) {
-            // send voice transcript directly to bot (voice-only path)
             sendBotMessageDirect(data.text);
           } else {
             setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
@@ -368,20 +360,15 @@ export default function ChatWindow() {
         }
       };
 
-      // start silence monitor
       audioMonitorRef.current = startAudioMonitor(stream, {
         onSoundLevel: (rms) => {
-          //console.debug("voice rms", rms);
-          const threshold = 0.01; // empirical threshold for speech - adjust if needed
+          const threshold = 0.01;
           if (rms > threshold) {
-            // there is sound — reset silence timeout
             if (silenceTimeoutRef.current) {
               clearTimeout(silenceTimeoutRef.current);
               silenceTimeoutRef.current = null;
             }
-            // set new silence timeout to auto-stop after 1s of silence
             silenceTimeoutRef.current = setTimeout(() => {
-              // stop recording due to silence
               try {
                 if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
                   mediaRecorderRef.current.stop();
@@ -427,8 +414,7 @@ export default function ChatWindow() {
   const startSegmentRecording = () => {
     try {
       if (!continuousStreamRef.current) return;
-      // stop TTS if it's playing (we don't want to record TTS playback)
-      stopTTS();
+      stopTTS(); // prevent recording TTS playback
 
       recordingChunksRef.current = [];
       let options = { mimeType: "audio/webm;codecs=opus" };
@@ -439,9 +425,7 @@ export default function ChatWindow() {
       recordingSegmentRef.current = mr;
 
       mr.ondataavailable = (e) => { if (e.data && e.data.size) recordingChunksRef.current.push(e.data); };
-      mr.onstart = () => {
-        // optional UI hook: set recording UI state if desired
-      };
+      mr.onstart = () => { /* optional UI hook */ };
       mr.onstop = async () => {
         const blob = new Blob(recordingChunksRef.current, { type: mr.mimeType || "audio/webm" });
         recordingChunksRef.current = [];
@@ -457,7 +441,6 @@ export default function ChatWindow() {
             const data = await res.json();
             const text = data.text || "";
             if (text.trim()) {
-              // send to bot and play tts reply
               sendBotMessageDirect(text);
             } else {
               setMessages(prev => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
@@ -493,7 +476,7 @@ export default function ChatWindow() {
 
   const startContinuousVoice = async () => {
     try {
-      if (continuousStreamRef.current) return; // already started
+      if (continuousStreamRef.current) return;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       continuousStreamRef.current = stream;
 
@@ -513,7 +496,6 @@ export default function ChatWindow() {
       const poll = () => {
         try {
           analyser.getByteTimeDomainData(dataArray);
-          // compute RMS
           let sum = 0;
           for (let i = 0; i < dataArray.length; i++) {
             const v = (dataArray[i] - 128) / 128;
@@ -521,46 +503,62 @@ export default function ChatWindow() {
           }
           const rms = Math.sqrt(sum / dataArray.length);
 
-          // update UI orb level with some smoothing and scaling
-          const scaled = Math.max(0, Math.min(1, rms * 12));
-          setVoiceOrbLevel((prev) => (prev * 0.7) + (scaled * 0.3));
+          // smoothing for orb value
+          smoothedRmsRef.current = smoothedRmsRef.current * (1 - smoothingAlpha) + rms * smoothingAlpha;
+          const scaled = Math.max(0, Math.min(1, smoothedRmsRef.current * 16));
+          setVoiceOrbLevel(prev => (prev * 0.7) + (scaled * 0.3));
 
-          // If TTS playing & user speaks -> interrupt TTS
-          if (botSpeaking && rms > speechThreshold) {
-            stopTTS();
-          }
+          // choose threshold depending on whether AI is speaking (raise threshold during playback)
+          const threshold = botSpeaking ? playbackInterruptThreshold : startThreshold;
 
-          // Speech segment detection logic
+          const now = performance.now();
+
+          // start condition: must be above threshold continuously for startHoldMs
           if (!recordingSegmentRef.current) {
-            if (rms > speechThreshold) {
-              // start recording a segment
-              startSegmentRecording();
-              if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+            if (smoothedRmsRef.current > threshold) {
+              if (lastAboveTimeRef.current === 0) lastAboveTimeRef.current = now;
+              // only start if stayed above for startHoldMs
+              if (now - lastAboveTimeRef.current >= startHoldMs) {
+                // start segment
+                startSegmentRecording();
+                lastAboveTimeRef.current = 0;
+                if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+              }
+            } else {
+              lastAboveTimeRef.current = 0;
             }
           } else {
-            // we are recording; detect silence
-            if (rms <= speechThreshold) {
+            // recording: if below threshold start silence timer to stop recording
+            if (smoothedRmsRef.current <= threshold) {
               if (!silenceTimerRef.current) {
                 silenceTimerRef.current = setTimeout(() => {
                   stopSegmentRecording();
                 }, silenceMs);
               }
             } else {
-              // audio present -> reset silence timer
               if (silenceTimerRef.current) {
                 clearTimeout(silenceTimerRef.current);
                 silenceTimerRef.current = null;
               }
             }
+            // Also: if TTS started unexpectedly, stop recording to avoid capturing playback
+            if (botSpeaking) {
+              // if bot started speaking, we should stop recording immediately
+              if (recordingSegmentRef.current) stopSegmentRecording();
+            }
+          }
+
+          // while botSpeaking: if rms crosses playbackInterruptThreshold, interrupt TTS
+          if (botSpeaking && smoothedRmsRef.current > playbackInterruptThreshold) {
+            stopTTS();
           }
         } catch (e) {
           console.warn("continuous poll error", e);
         }
         rafId = requestAnimationFrame(poll);
+        continuousRafRef.current = rafId;
       };
       rafId = requestAnimationFrame(poll);
-      // store raf id so we can cancel
-      continuousStreamRef.current._rafId = rafId;
     } catch (err) {
       console.error("startContinuousVoice failed", err);
       setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Microphone access denied or unavailable." }]);
@@ -569,7 +567,10 @@ export default function ChatWindow() {
 
   const stopContinuousVoice = () => {
     try {
-      try { cancelAnimationFrame(continuousStreamRef.current?._rafId); } catch (e) {}
+      if (continuousRafRef.current) {
+        try { cancelAnimationFrame(continuousRafRef.current); } catch (e) {}
+        continuousRafRef.current = null;
+      }
       try { if (recordingSegmentRef.current) stopSegmentRecording(); } catch (e) {}
       try { continuousStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
       continuousStreamRef.current = null;
@@ -577,6 +578,8 @@ export default function ChatWindow() {
       continuousAudioCtxRef.current = null;
       continuousAnalyserRef.current = null;
       continuousDataArrayRef.current = null;
+      lastAboveTimeRef.current = 0;
+      smoothedRmsRef.current = 0;
       if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
       setVoiceOrbLevel(0);
     } catch (e) {
@@ -587,7 +590,6 @@ export default function ChatWindow() {
   // ===== NEW dictation and legacy dictation left as-is (unchanged) =====
   const toggleDictation = async () => {
     if (isDictating) {
-      // stop dictation
       stopDictationRecording();
       return;
     }
@@ -611,7 +613,6 @@ export default function ChatWindow() {
         if (e.data && e.data.size > 0) audioChunksDictRef.current.push(e.data);
       };
       mr.onstop = async () => {
-        // cleanup monitor
         if (audioMonitorDictRef.current) {
           audioMonitorDictRef.current();
           audioMonitorDictRef.current = null;
@@ -631,7 +632,6 @@ export default function ChatWindow() {
           const data = await res.json();
 
           if (data.text) {
-            // append transcript into textarea for editing
             setInput((prev) => (prev && prev.trim() ? prev + " " + data.text : data.text));
             requestAnimationFrame(resizeTextarea);
             textareaRef.current?.focus();
@@ -650,7 +650,6 @@ export default function ChatWindow() {
         }
       };
 
-      // start silence monitor for dictation
       audioMonitorDictRef.current = startAudioMonitor(stream, {
         onSoundLevel: (rms) => {
           const threshold = 0.01;
@@ -715,11 +714,8 @@ export default function ChatWindow() {
     if (!input.trim() || !apiKey || !clientDomain) return;
 
     const text = input.trim();
-
-    // typed input -> show bubble
     setMessages((prev) => [...prev, { sender: "user", text }]);
-    setLastWasVoice(false); // mark explicitly
-
+    setLastWasVoice(false);
     setLoading(true);
 
     try {
@@ -739,15 +735,8 @@ export default function ChatWindow() {
       const data = await res.json();
       const rawAnswer = data.answer || "Sorry, I could not find an answer.";
       const displayText = cleanForDisplay(rawAnswer);
-      const aiMessage = {
-        sender: "ai",
-        text: displayText,
-      };
-
-      // typed input -> show chatbot bubble
+      const aiMessage = { sender: "ai", text: displayText };
       setMessages((prev) => [...prev, aiMessage]);
-
-      // 🚫 no TTS for text input
     } catch (e) {
       setMessages((prev) => [...prev, { sender: "ai", text: `⚠️ ${e.message}` }]);
     }
@@ -761,8 +750,7 @@ export default function ChatWindow() {
   const sendBotMessageDirect = async (voiceText) => {
     if (!voiceText || !apiKey || !clientDomain) return;
 
-    setLastWasVoice(true); // voice input
-
+    setLastWasVoice(true);
     setLoading(true);
 
     try {
@@ -782,10 +770,8 @@ export default function ChatWindow() {
       const data = await res.json();
       const aiMessage = data.answer || "Sorry, I could not find an answer.";
 
-      // 🚫 don't show bubbles for voice input
-      // 🔊 just play TTS (interruptible)
+      // play TTS reply (interruptible)
       playTTS(stripMarkdownForSpeech(aiMessage));
-
     } catch (e) {
       console.error("Voice flow error:", e);
     }
@@ -811,7 +797,6 @@ export default function ChatWindow() {
       if (!res.ok) throw new Error("Unable to start live chat");
       const data = await res.json();
 
-      // debug JWT
       try {
         const payload = JSON.parse(atob(data.supabase_jwt.split(".")[1]));
         console.log("VISITOR JWT payload (widget):", payload);
@@ -829,7 +814,6 @@ export default function ChatWindow() {
       supaRef.current = supa;
       supa.realtime.setAuth(data.supabase_jwt);
 
-      // initial history
       try {
         const { data: history, error: histErr } = await supa
           .from("live_messages")
@@ -845,7 +829,6 @@ export default function ChatWindow() {
         console.warn("History fetch exception:", e);
       }
 
-      // realtime subscribe
       const ch = supa
         .channel(`live:msgs:${data.conversation_id}`)
         .on(
@@ -912,7 +895,7 @@ export default function ChatWindow() {
       stopTTS();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode]);
+  }, [viewMode, botSpeaking]);
 
   // Voice Mode UI
   if (viewMode === "voice") {
@@ -943,19 +926,19 @@ export default function ChatWindow() {
               style={{
                 width: 160,
                 height: 160,
-                background: "radial-gradient(circle at 30% 20%, rgba(79,70,229,0.15), transparent 30%)",
+                background: "radial-gradient(circle at 30% 20%, rgba(79,70,229,0.06), transparent 35%)",
                 boxShadow: "0 12px 40px rgba(0,0,0,0.12)",
               }}
             >
-              {/* animated inner circle */}
+              {/* inner animated circle */}
               <div
                 style={{
                   width: 96,
                   height: 96,
                   borderRadius: 9999,
                   background: "linear-gradient(135deg,#7c3aed,#4f46e5)",
-                  transform: `scale(${0.85 + voiceOrbLevel * 0.4})`,
-                  transition: "transform 80ms linear",
+                  transform: `scale(${0.85 + voiceOrbLevel * 0.5})`,
+                  transition: "transform 100ms linear",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center"
@@ -964,10 +947,38 @@ export default function ChatWindow() {
                 <Mic className="w-6 h-6 text-white" />
               </div>
 
-              {/* subtle ripple depending on level */}
+              {/* animated rings */}
               <svg style={{ position: "absolute", inset: 0, pointerEvents: "none" }} viewBox="0 0 160 160" width="160" height="160">
-                <circle cx="80" cy="80" r={40 + voiceOrbLevel * 18} fill="none" stroke="rgba(79,70,229,0.12)" strokeWidth={3 + voiceOrbLevel * 4} />
+                <circle cx="80" cy="80" r={54 + voiceOrbLevel * 12} fill="none" stroke="rgba(79,70,229,0.08)" strokeWidth={2 + voiceOrbLevel * 2} />
+                <circle cx="80" cy="80" r={40 + voiceOrbLevel * 8} fill="none" stroke="rgba(79,70,229,0.06)" strokeWidth={1 + voiceOrbLevel * 1.6} />
               </svg>
+
+              {/* flowing dots (simple) */}
+              <div style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }}>
+                <div style={{
+                  position: "absolute",
+                  left: `${50 - voiceOrbLevel * 6}%`,
+                  top: `${40 - voiceOrbLevel * 6}%`,
+                  width: 8,
+                  height: 8,
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.85)",
+                  transform: `translate(-50%,-50%) scale(${0.9 + voiceOrbLevel * 0.6})`,
+                  transition: "all 120ms linear",
+                  filter: "blur(0.2px)"
+                }} />
+                <div style={{
+                  position: "absolute",
+                  left: `${60 + voiceOrbLevel * 6}%`,
+                  top: `${62 + voiceOrbLevel * 6}%`,
+                  width: 6,
+                  height: 6,
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.6)",
+                  transform: `translate(-50%,-50%) scale(${0.7 + voiceOrbLevel * 0.4})`,
+                  transition: "all 140ms linear",
+                }} />
+              </div>
             </div>
           </div>
 
@@ -976,7 +987,7 @@ export default function ChatWindow() {
             {botSpeaking ? (
               <div className="space-y-2">
                 <div className="text-xl font-semibold text-voice-foreground">AI is speaking</div>
-                <div className="text-sm text-voice-foreground/70">Say anything to interrupt</div>
+                <div className="text-sm text-voice-foreground/70">Say anything loudly to interrupt</div>
               </div>
             ) : recordingSegmentRef.current ? (
               <div className="space-y-2">
@@ -1012,7 +1023,7 @@ export default function ChatWindow() {
     );
   }
 
-  // Text Mode UI
+  // Text Mode UI (unchanged, kept full)
   return (
     <Card className="w-full h-full flex flex-col min-h-0 overflow-hidden shadow-elegant bg-gradient-subtle border-0">
       {/* Modern Header */}
@@ -1126,7 +1137,7 @@ export default function ChatWindow() {
             <Send className="w-4 h-4" />
           </button>
 
-          {/* DICTATE BUTTON: different symbol (Sparkles) so it's visually distinct */}
+          {/* DICTATE BUTTON */}
           <button
             onClick={toggleDictation}
             title={isDictating ? "Stop dictation" : "Dictate (adds text to input)"}
@@ -1139,7 +1150,7 @@ export default function ChatWindow() {
             </span>
           </button>
 
-          {/* VOICE-ONLY MODE BUTTON: distinct round ChatGPT-like UI */}
+          {/* VOICE-ONLY MODE BUTTON */}
           <button
             onClick={() => setViewMode("voice")}
             title="Open voice-only mode"
