@@ -58,6 +58,7 @@ export default function ChatWindow() {
   const mediaRecorderDictRef = useRef(null);
   const audioChunksDictRef = useRef([]);
   const streamDictRef = useRef(null);
+  const audioMonitorDictRef = useRef(null);
 
   // WebAudio monitoring refs for silence detection
   const audioMonitorRef = useRef(null); // stop function
@@ -72,7 +73,6 @@ export default function ChatWindow() {
   const continuousRafRef = useRef(null);
   const smoothedRmsRef = useRef(0);
   const smoothedOrbRef = useRef(0);
-  const smoothedPeakHoldRef = useRef(0);
 
   // playback refs
   const currentAudioRef = useRef(null);
@@ -96,28 +96,23 @@ export default function ChatWindow() {
   // orb UI level
   const [voiceOrbLevel, setVoiceOrbLevel] = useState(0); // 0..1
 
+  // when user interrupts while bot speaking: mark this to handle "interrupt phrases"
+  const interruptDuringPlaybackRef = useRef(false);
+
   function stripMarkdownForSpeech(s = "") {
     if (!s) return "";
-    // remove bullet markers at start of lines and heading markers
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
     s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
-    // remove leftover inline emphasis markers *like this*
     s = s.replace(/\*(.*?)\*/g, "$1");
-    // collapse multiple newlines and replace with single space for speech
     s = s.replace(/\n+/g, " ").replace(/\s{2,}/g, " ").trim();
     return s;
   }
 
-  // preserve paragraphs/newlines, but strip bullet markers, headings, inline asterisks
   function cleanForDisplay(s = "") {
     if (!s) return "";
-    // remove leading bullet markers at line starts
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
-    // remove heading markers like "# " at line starts
     s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
-    // remove inline emphasis markers *like this* -> like this
     s = s.replace(/\*(.*?)\*/g, "$1");
-    // trim spaces on each line and remove trailing/leading whitespace
     s = s.split("\n").map((l) => l.trim()).join("\n").trim();
     return s;
   }
@@ -206,8 +201,8 @@ export default function ChatWindow() {
       stopTTS();
 
       setBotSpeaking(true);
-      // set monitoring mode: during playback we still monitor for loud user speech but require higher threshold
       monitoringModeRef.current = "duringPlayback";
+      interruptDuringPlaybackRef.current = false;
 
       const res = await fetch("https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text));
       if (!res.ok) throw new Error("TTS fetch failed");
@@ -254,16 +249,44 @@ export default function ChatWindow() {
     }
   };
 
+  // ---------- helper to detect short interrupt phrases ----------
+  const isInterruptPhrase = (text) => {
+    if (!text) return false;
+    const t = text.trim().toLowerCase();
+    const normalized = t.replace(/[^\w\s]/g, "").trim();
+    const interruptList = [
+      "stop",
+      "stop talking",
+      "be quiet",
+      "please stop",
+      "no",
+      "shh",
+      "thanks",
+      "thank you",
+      "that's enough",
+      "enough",
+      "pause",
+      "hold on",
+      "wait",
+    ];
+    if (interruptList.includes(normalized)) return true;
+    // also treat extremely short single-word utterances as interrupts
+    const words = normalized.split(/\s+/).filter(Boolean);
+    if (words.length <= 2 && normalized.length < 16) {
+      // check if words are common short words (not full question)
+      const stopWords = ["stop", "no", "thanks", "ok", "okay", "wait", "pause", "shh"];
+      if (words.every((w) => stopWords.includes(w))) return true;
+    }
+    return false;
+  };
+
   // ---------- Audio monitoring / silence detection helpers ----------
-  // startAudioMonitor returns a stop function. onSoundLevel(level) called each tick.
   const startAudioMonitorCore = async (stream) => {
     try {
-      // create AudioContext and analyser
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
 
-      // set up analyser for time domain
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048;
       analyserRef.current = analyser;
@@ -311,7 +334,8 @@ export default function ChatWindow() {
               if (!isRecording) {
                 // if bot is speaking, this is user interrupt -> stop TTS and start recording
                 if (botSpeaking) {
-                  stopTTS();
+                  interruptDuringPlaybackRef.current = true;
+                  stopTTS(); // stop immediately
                 }
                 startVoiceRecording(stream);
               }
@@ -322,14 +346,11 @@ export default function ChatWindow() {
             if (vadAboveStartRef.current) vadAboveStartRef.current = 0;
             // if we are currently speaking and silence has lasted silenceForUtteranceMs -> finalize utterance
             if (userSpeakingRef.current && now - vadBelowStartRef.current > silenceForUtteranceMs) {
-              // mark last utterance timestamp
               lastUtteranceAtRef.current = now;
               userSpeakingRef.current = false;
               // stop recording and send STT
               if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
                 try { mediaRecorderRef.current.stop(); } catch (e) { console.warn("stop recorder error", e); }
-              } else {
-                // if not using MediaRecorder for some reason, we can fallback to sending smaller buffer - but we'll rely on MediaRecorder
               }
             }
           }
@@ -364,7 +385,6 @@ export default function ChatWindow() {
   // ---------- continuous "always-on" mic for voice mode ----------
   const startContinuousListening = async () => {
     try {
-      // request mic with some helpful constraints
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -374,9 +394,6 @@ export default function ChatWindow() {
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
-      // Prepare MediaRecorder for capturing segments on-demand (we will create a fresh MediaRecorder when user starts speaking)
-      // But we still use MediaRecorder only when user speaking is detected. The analyser uses the stream for VAD.
-      // start monitor core
       if (audioMonitorRef.current) {
         audioMonitorRef.current();
         audioMonitorRef.current = null;
@@ -390,15 +407,12 @@ export default function ChatWindow() {
 
   const stopContinuousListening = () => {
     try {
-      // stop monitor
       if (audioMonitorRef.current) {
         try { audioMonitorRef.current(); } catch (e) {}
         audioMonitorRef.current = null;
       }
-      // stop stream tracks
       try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
       streamRef.current = null;
-      // cleanup audioctx
       try { if (audioCtxRef.current) audioCtxRef.current.close(); } catch (e) {}
       audioCtxRef.current = null;
       analyserRef.current = null;
@@ -417,7 +431,6 @@ export default function ChatWindow() {
   // ---------- start/stop a MediaRecorder when user starts speaking ----------
   const startVoiceRecording = (stream) => {
     try {
-      // Create a fresh MediaRecorder to capture user's utterance
       let options = { mimeType: "audio/webm;codecs=opus" };
       if (!MediaRecorder.isTypeSupported(options.mimeType)) {
         options = { mimeType: "audio/webm" };
@@ -426,7 +439,6 @@ export default function ChatWindow() {
         options = {};
       }
       audioChunksRef.current = [];
-      // prefer using the already-open streamRef if available
       const recStream = stream || streamRef.current;
       if (!recStream) {
         console.warn("no stream to record from");
@@ -443,12 +455,10 @@ export default function ChatWindow() {
       };
       mr.onstop = async () => {
         setIsRecording(false);
-        // cleanup VAD timers
         if (silenceTimeoutRef.current) {
           clearTimeout(silenceTimeoutRef.current);
           silenceTimeoutRef.current = null;
         }
-        // form blob and send to your STT endpoint
         const blob = new Blob(audioChunksRef.current, { type: mr.mimeType || "audio/webm" });
         const formData = new FormData();
         formData.append("file", blob, "recording.webm");
@@ -461,9 +471,28 @@ export default function ChatWindow() {
           const data = await res.json();
           console.log("STT response (voice view):", data);
 
-          if (data.text) {
-            // send voice transcript directly to bot (voice-only path)
-            sendBotMessageDirect(data.text);
+          const transcript = (data.text || "").trim();
+          // If user interrupted while playback -> decide whether to send as query
+          if (interruptDuringPlaybackRef.current) {
+            // reset flag
+            const wasInterrupt = isInterruptPhrase(transcript);
+            interruptDuringPlaybackRef.current = false;
+            if (wasInterrupt || transcript.length === 0) {
+              // user likely just wanted to stop the AI speaking — do nothing further
+              // keep listening (continuous) — do not call sendBotMessageDirect
+              console.log("User interrupt detected; not sending to bot:", transcript);
+              return;
+            } else {
+              // user spoke something meaningful while interrupting — treat as query
+              console.log("User interrupted and gave query:", transcript);
+              sendBotMessageDirect(transcript);
+              return;
+            }
+          }
+
+          if (transcript) {
+            // normal flow (not an interrupt during playback)
+            sendBotMessageDirect(transcript);
           } else {
             setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Could not transcribe audio." }]);
           }
@@ -489,21 +518,25 @@ export default function ChatWindow() {
     } catch (e) {
       console.warn("stopVoiceRecording error", e);
     }
-    try { streamRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
-    // do not null streamRef here — continuous listener controls it
+    // Do NOT stop the continuous stream here — continuous listening owns streamRef
     setIsRecording(false);
   };
 
   // ===== NEW: dictation recording (transcribe into input box only) with silence auto-stop =====
   const toggleDictation = async () => {
     if (isDictating) {
-      // stop dictation
       stopDictationRecording();
       return;
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Prefer reusing the continuous stream (if already open) to avoid permission conflicts
+      let stream = streamDictRef.current || streamRef.current;
+      let createdLocalStream = false;
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        createdLocalStream = true;
+      }
       streamDictRef.current = stream;
 
       let options = { mimeType: "audio/webm;codecs=opus" };
@@ -521,7 +554,6 @@ export default function ChatWindow() {
         if (e.data && e.data.size > 0) audioChunksDictRef.current.push(e.data);
       };
       mr.onstop = async () => {
-        // cleanup monitor
         if (audioMonitorDictRef.current) {
           audioMonitorDictRef.current();
           audioMonitorDictRef.current = null;
@@ -541,7 +573,6 @@ export default function ChatWindow() {
           const data = await res.json();
 
           if (data.text) {
-            // append transcript into textarea for editing
             setInput((prev) => (prev && prev.trim() ? prev + " " + data.text : data.text));
             requestAnimationFrame(resizeTextarea);
             textareaRef.current?.focus();
@@ -554,14 +585,14 @@ export default function ChatWindow() {
           setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Error transcribing dictation." }]);
         } finally {
           audioChunksDictRef.current = [];
-          try { streamDictRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
-          streamDictRef.current = null;
+          try { if (createdLocalStream) streamDictRef.current?.getTracks().forEach((t) => t.stop()); } catch (e) {}
+          // If we reused the main streamRef, do NOT stop it here
+          if (createdLocalStream) streamDictRef.current = null;
           setIsDictating(false);
         }
       };
 
-      // start silence monitor for dictation
-      // reuse simple approach: auto-stop when 1s of silence after speech
+      // start silence monitor for dictation using the chosen stream (reuse earlier approach)
       const dictAnalyzer = await (async () => {
         try {
           const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -707,7 +738,6 @@ export default function ChatWindow() {
     if (!voiceText || !apiKey || !clientDomain) return;
 
     setLastWasVoice(true); // voice input
-
     setLoading(true);
 
     try {
@@ -727,7 +757,6 @@ export default function ChatWindow() {
       const data = await res.json();
       const aiMessage = data.answer || "Sorry, I could not find an answer.";
 
-      // 🚫 don't show bubbles for voice input
       // 🔊 just play TTS
       playTTS(stripMarkdownForSpeech(aiMessage));
 
@@ -847,16 +876,12 @@ export default function ChatWindow() {
   // When switching into voice view, start continuous listening automatically
   useEffect(() => {
     if (viewMode === "voice") {
-      // initialize continuous listening
       startContinuousListening();
     } else {
-      // stop continuous listener when leaving voice view
       stopContinuousListening();
-      // also stop any TTS playback
       stopTTS();
     }
 
-    // cleanup on unmount
     return () => {
       stopContinuousListening();
       stopTTS();
@@ -892,8 +917,8 @@ export default function ChatWindow() {
         {/* Header */}
         <div className="absolute top-6 left-0 right-0 text-center z-10">
           <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-8 h-8 rounded-full bg-voice-primary/20 flex items-center justify-center">
-              <Mic className="w-4 h-4 text-voice-primary" />
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isRecording ? "bg-rose-500/20" : "bg-voice-primary/20"}`}>
+              <Mic className={`w-4 h-4 ${isRecording ? "text-rose-500" : "text-voice-primary"}`} />
             </div>
             <h2 className="text-2xl font-bold text-voice-foreground">{botName}</h2>
           </div>
@@ -906,11 +931,14 @@ export default function ChatWindow() {
           <div className="mb-6">
             <div
               aria-hidden
-              className="relative w-32 h-32 rounded-full flex items-center justify-center"
+              className="relative w-36 h-36 rounded-full flex items-center justify-center"
               style={{
-                // animated gradient + scale based on orb level
-                background: `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.35 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.2 + voiceOrbLevel * 0.3}), transparent 40%)`,
-                boxShadow: `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
+                background: isRecording
+                  ? `radial-gradient(circle at 30% 30%, rgba(244,63,94,${0.3 + voiceOrbLevel * 0.5}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(234,88,12,${0.1 + voiceOrbLevel * 0.25}), transparent 40%)`
+                  : `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.25 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.15 + voiceOrbLevel * 0.3}), transparent 40%)`,
+                boxShadow: isRecording
+                  ? `0 12px ${24 + voiceOrbLevel * 30}px rgba(244,63,94,${0.06 + voiceOrbLevel * 0.12})`
+                  : `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
                 transform: `scale(${1 + voiceOrbLevel * 0.06})`,
                 transition: "transform 120ms linear, box-shadow 160ms linear",
               }}
@@ -919,8 +947,8 @@ export default function ChatWindow() {
               <div
                 style={{
                   position: "absolute",
-                  width: `${60 + voiceOrbLevel * 30}px`,
-                  height: `${60 + voiceOrbLevel * 30}px`,
+                  width: `${64 + voiceOrbLevel * 36}px`,
+                  height: `${64 + voiceOrbLevel * 36}px`,
                   borderRadius: "50%",
                   opacity: 0.08 + voiceOrbLevel * 0.5,
                   transform: `translateZ(0)`,
@@ -928,9 +956,29 @@ export default function ChatWindow() {
                   background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
                 }}
               />
-              <div className="relative z-10 w-20 h-20 rounded-full flex items-center justify-center" style={{ background: "linear-gradient(135deg,#6d28d9,#4f46e5)", boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)" }}>
+              <div
+                className="relative z-10 w-24 h-24 rounded-full flex items-center justify-center"
+                style={{
+                  background: isRecording ? "linear-gradient(135deg,#ff6b6b,#f97316)" : "linear-gradient(135deg,#6d28d9,#4f46e5)",
+                  boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)",
+                }}
+              >
                 <Mic className="w-6 h-6 text-white" />
               </div>
+
+              {/* small pulsing ring when recording */}
+              {isRecording && (
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    inset: -8,
+                    borderRadius: "50%",
+                    boxShadow: `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`,
+                    animation: "pulse 1200ms infinite ease-in-out",
+                  }}
+                />
+              )}
             </div>
           </div>
 
@@ -939,31 +987,31 @@ export default function ChatWindow() {
             {botSpeaking ? (
               <div className="space-y-2">
                 <div className="text-xl font-semibold text-voice-foreground">AI is speaking</div>
-                <div className="text-sm text-voice-foreground/70">You can interrupt by speaking.</div>
+                <div className="text-sm text-voice-foreground/70">You can interrupt by speaking — short commands like "stop" will only stop the AI.</div>
               </div>
             ) : isRecording ? (
               <div className="space-y-2">
-                <div className="text-xl font-semibold text-voice-foreground">Listening</div>
+                <div className="text-xl font-semibold text-voice-foreground">Recording</div>
                 <div className="text-sm text-voice-foreground/70">Speak now — will stop automatically after 0.8s of silence</div>
               </div>
             ) : (
               <div className="space-y-2">
                 <div className="text-xl font-semibold text-voice-foreground">Ready to listen</div>
-                <div className="text-sm text-voice-foreground/70">Speak at any time — the mic is always on</div>
+                <div className="text-sm text-voice-foreground/70">Mic is always on — speak anytime</div>
               </div>
             )}
           </div>
 
           {/* Simple Audio Visualization */}
           {(isRecording || botSpeaking) && (
-            <div className="flex items-center gap-1 mt-6">
+            <div className="flex items-center gap-2 mt-6">
               {[1, 2, 3, 4, 5].map((i) => (
                 <div
                   key={i}
-                  className={`w-2 rounded-full opacity-80`}
+                  className="w-2 rounded-full opacity-90"
                   style={{
-                    height: `${10 + voiceOrbLevel * 40 * (i / 5)}px`,
-                    background: botSpeaking ? "linear-gradient(180deg,#eab308,#f97316)" : "linear-gradient(180deg,#7c3aed,#4f46e5)",
+                    height: `${8 + voiceOrbLevel * 36 * (i / 5)}px`,
+                    background: isRecording ? "linear-gradient(180deg,#ff6b6b,#f97316)" : "linear-gradient(180deg,#7c3aed,#4f46e5)",
                     transition: "height 120ms linear",
                   }}
                 />
@@ -983,7 +1031,7 @@ export default function ChatWindow() {
     );
   }
 
-  // Text Mode UI
+  // Text Mode UI (unchanged layout)
   return (
     <Card className="w-full h-full flex flex-col min-h-0 overflow-hidden shadow-elegant bg-gradient-subtle border-0">
       {/* Modern Header */}
