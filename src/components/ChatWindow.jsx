@@ -228,6 +228,26 @@ function cleanForDisplay(s = "") {
     };
   };
 
+
+  // simple inline waveform SVG (compact, accessible)
+const WaveformIcon = ({ className = "w-4 h-4", title = "waveform" }) => (
+  <svg
+    aria-hidden="true"
+    role="img"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <title>{title}</title>
+    <path d="M2 12h2v4h2v-8h2v12h2V6h2v16h2V4h2v10h2v-6h2" />
+  </svg>
+);
+
+
   // ---------- toggleRecording (voice-only) with silence auto-stop ----------
   const toggleRecording = async () => {
     if (isRecording) {
@@ -804,7 +824,7 @@ function cleanForDisplay(s = "") {
             {messages.length === 0 && (
               <div className="text-center py-12 animate-fade-in">
                 <div className="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center shadow-glow bg-[linear-gradient(135deg,_hsl(var(--primary)),_hsl(292_84%_61%))]">
-                  <Sparkles className="w-8 h-8 text-white" />
+                  <WaveformIcon className="w-8 h-8 text-white" />
                 </div>
                 <h3 className="text-xl font-bold text-foreground mb-2">Welcome to {botName}!</h3>
                 <p className="text-muted-foreground max-w-md mx-auto">
@@ -877,7 +897,7 @@ function cleanForDisplay(s = "") {
             style={{ minWidth: 44 }}
           >
             <span className="relative flex items-center justify-center">
-              <Sparkles className="w-4 h-4" />
+              <WaveformIcon className="w-4 h-4" title={isDictating ? "Dictating" : "Dictate"} />
               {isDictating && <span className="absolute -right-1 -top-1 w-2 h-2 rounded-full bg-white/90 animate-pulse" />}
             </span>
           </button>
@@ -897,7 +917,7 @@ function cleanForDisplay(s = "") {
           {liveMode ? (
             "Connected to live support"
           ) : (
-            `Powered by ${botName} • Click the round mic for voice chat or the orange mic to dictate into the input`
+            `Powered by ${botName} • Click the round mic for voice chat or the waveform mic to dictate into the input`
           )}
         </div>
       </div>
