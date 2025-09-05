@@ -82,6 +82,22 @@ export default function ChatWindow() {
 }
 
 
+// preserve paragraphs/newlines, but strip bullet markers, headings, inline asterisks
+function cleanForDisplay(s = "") {
+  if (!s) return "";
+  // remove leading bullet markers at line starts
+  s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
+  // remove heading markers like "# " at line starts
+  s = s.replace(/^[\s]*#{1,6}\s+/gm, "");
+  // remove inline emphasis markers *like this* -> like this
+  s = s.replace(/\*(.*?)\*/g, "$1");
+  // trim spaces on each line and remove trailing/leading whitespace
+  s = s.split("\n").map((l) => l.trim()).join("\n").trim();
+  return s;
+}
+
+
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setApiKey(params.get("apiKey") || "");
@@ -494,9 +510,11 @@ export default function ChatWindow() {
       if (!res.ok) throw new Error("Error fetching answer");
 
       const data = await res.json();
+      const rawAnswer = data.answer || "Sorry, I could not find an answer.";
+      const displayText = cleanForDisplay(rawAnswer);
       const aiMessage = {
         sender: "ai",
-        text: data.answer || "Sorry, I could not find an answer.",
+        text: displayText,
       };
 
       // typed input -> show chatbot bubble
@@ -593,7 +611,7 @@ export default function ChatWindow() {
           .order("created_at", { ascending: true });
         if (histErr) console.warn("Initial history fetch failed:", histErr);
         if (history?.length) {
-          const mapped = history.filter((r) => r.sender_type === "executive").map((r) => ({ sender: "ai", text: r.message }));
+          const mapped = history.filter((r) => r.sender_type === "executive").map((r) => ({ sender: "ai", text: cleanForDisplay(r.message || "") }));
           if (mapped.length) setMessages((prev) => [...prev, ...mapped]);
         }
       } catch (e) {
@@ -615,7 +633,7 @@ export default function ChatWindow() {
             const row = payload.new;
             if (!row) return;
             if (row.sender_type !== "executive") return;
-            setMessages((prev) => [...prev, { sender: "ai", text: row.message }]);
+            setMessages((prev) => [...prev, { sender: "ai", text: cleanForDisplay(row.message || "") }]);
           }
         )
         .subscribe();
