@@ -1008,62 +1008,76 @@ const stopTTS = () => {
 
         <div className="flex flex-col items-center justify-center flex-1 z-10">
           <div className="mb-6">
-            <div
-              aria-hidden
-              className="relative w-36 h-36 rounded-full flex items-center justify-center"
-              style={{
-  background: isRecording
-    ? `radial-gradient(circle at 30% 30%, rgba(244,63,94,${0.3 + voiceOrbLevel * 0.5}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(234,88,12,${0.1 + voiceOrbLevel * 0.25}), transparent 40%)`
-    : botSpeaking
-      ? "linear-gradient(135deg,#10b981,#059669)" // green center when AI speaking
-      : `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.25 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.15 + voiceOrbLevel * 0.3}), transparent 40%)`,
-  // solid black ring when bot is speaking
-  border: botSpeaking ? "6px solid rgba(0,0,0,0.75)" : "none",
-  // shadow: red when recording, black glow when speaking, purple otherwise
-  boxShadow: isRecording
-    ? `0 12px ${24 + voiceOrbLevel * 30}px rgba(244,63,94,${0.06 + voiceOrbLevel * 0.12})`
-    : botSpeaking
-      ? `0 10px ${20 + voiceOrbLevel * 30}px rgba(0,0,0,0.7)` // black glow while AI speaks
-      : `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
-  transform: `scale(${1 + voiceOrbLevel * 0.06})`,
-  transition: "transform 120ms linear, box-shadow 160ms linear, border 200ms linear",
-}}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  width: `${64 + voiceOrbLevel * 36}px`,
-                  height: `${64 + voiceOrbLevel * 36}px`,
-                  borderRadius: "50%",
-                  opacity: 0.08 + voiceOrbLevel * 0.5,
-                  transform: `translateZ(0)`,
-                  transition: "width 160ms linear, height 160ms linear, opacity 160ms linear",
-                  background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
-                }}
-              />
-              <div
-                className="relative z-10 w-24 h-24 rounded-full flex items-center justify-center"
-                style={{
-                  background: isRecording ? "linear-gradient(135deg,#ff6b6b,#f97316)" : botSpeaking ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#6d28d9,#4f46e5)",
-                  boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)",
-                }}
-              >
-                <Mic className="w-6 h-6 text-white" />
-              </div>
+            {/* --- Replace the inner contents of the outer orb <div> with this block --- */}
 
-              {isRecording && (
-                <span
-                  aria-hidden
-                  style={{
-                    position: "absolute",
-                    inset: -8,
-                    borderRadius: "50%",
-                    boxShadow: `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`,
-                    animation: "pulse 1200ms infinite ease-in-out",
-                  }}
-                />
-              )}
-            </div>
+{/* animated ripples + responsive scaling for AI speaking */}
+<div
+  aria-hidden
+  style={{
+    position: "absolute",
+    width: `${64 + voiceOrbLevel * 48}px`,
+    height: `${64 + voiceOrbLevel * 48}px`,
+    borderRadius: "50%",
+    opacity: botSpeaking ? 0.12 + voiceOrbLevel * 0.6 : 0.08 + voiceOrbLevel * 0.5,
+    transform: `scale(${1 + voiceOrbLevel * (botSpeaking ? 0.18 : 0.08)})`,
+    transition: "width 140ms linear, height 140ms linear, opacity 140ms linear, transform 140ms linear",
+    background: botSpeaking
+      ? "radial-gradient(circle, rgba(16,185,129,0.12), rgba(0,0,0,0))"
+      : "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
+    boxShadow: botSpeaking ? `0 0 ${16 + voiceOrbLevel * 40}px rgba(16,185,129,${0.06 + voiceOrbLevel * 0.14})` : undefined,
+    pointerEvents: "none",
+  }}
+/>
+
+{/* center circle (scales/bounces more when AI speaking) */}
+<div
+  className="relative z-10 w-24 h-24 rounded-full flex items-center justify-center"
+  style={{
+    background: isRecording
+      ? "linear-gradient(135deg,#ff6b6b,#f97316)"
+      : botSpeaking
+        ? "linear-gradient(135deg,#10b981,#059669)"
+        : "linear-gradient(135deg,#6d28d9,#4f46e5)",
+    boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)",
+    transform: `scale(${1 + voiceOrbLevel * (botSpeaking ? 0.22 : 0.06)})`,
+    transition: "transform 120ms linear, box-shadow 160ms linear, background 160ms linear",
+  }}
+>
+  <Mic className="w-6 h-6 text-white" />
+</div>
+
+{/* pulsing black ring when AI is speaking (green center, black surround) */}
+{botSpeaking && !isRecording && (
+  <span
+    aria-hidden
+    style={{
+      position: "absolute",
+      inset: -8,
+      borderRadius: "50%",
+      boxShadow: `0 0 ${8 + voiceOrbLevel * 40}px rgba(0,0,0,0.75)`,
+      transform: `scale(${1 + voiceOrbLevel * 0.12})`,
+      transition: "transform 120ms linear, box-shadow 160ms linear",
+      animation: "pulse 900ms infinite ease-in-out",
+      pointerEvents: "none",
+    }}
+  />
+)}
+
+{/* small pulsing ring when recording (keeps the red visual for user speech) */}
+{isRecording && (
+  <span
+    aria-hidden
+    style={{
+      position: "absolute",
+      inset: -8,
+      borderRadius: "50%",
+      boxShadow: `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`,
+      animation: "pulse 1200ms infinite ease-in-out",
+      pointerEvents: "none",
+    }}
+  />
+)}
+
           </div>
 
           <div className="text-center max-w-sm">
