@@ -80,8 +80,10 @@ export default function ChatWindow() {
   // allow monitoring to interrupt TTS or be paused; we use modes instead of a single flag
   const monitoringModeRef = useRef("normal"); // "normal" | "duringPlayback"
   // normal threshold tuned to avoid tiny noise; duringPlayback threshold higher to avoid accidental interruptions
-  const BASE_VOICE_THRESHOLD = 0.02; // adjust if too sensitive
-  const PLAYBACK_INTERRUPT_THRESHOLD = 0.03; // user must be louder to interrupt during playback
+  const BASE_VOICE_THRESHOLD = 0.016;      // was 0.02 — slightly more sensitive
+const PLAYBACK_INTERRUPT_THRESHOLD = 0.025; // was 0.03
+// smaller delta so user voice can exceed baseline while playback present
+const PLAYBACK_BASELINE_DELTA = 0.008; // new constant, use in poll
 
   // control variables for VAD debounce
   const vadAboveStartRef = useRef(0);
@@ -217,28 +219,36 @@ export default function ChatWindow() {
   }, []);
 
   // ===== TTS playback helpers (interruptible) =====
-  const stopTTS = () => {
-    try {
-      if (currentAudioRef.current) {
-        try { currentAudioRef.current.pause(); } catch (e) {}
-        try { currentAudioRef.current.currentTime = currentAudioRef.current.duration; } catch (e) {}
-        try { currentAudioRef.current.src = ""; } catch (e) {}
-        try { currentAudioRef.current.removeAttribute && currentAudioRef.current.removeAttribute('src'); } catch (e) {}
-        currentAudioRef.current = null;
-      }
-      if (currentAudioUrlRef.current) {
-        try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
-        currentAudioUrlRef.current = null;
-      }
-    } catch (e) {
-      console.warn("stopTTS error", e);
-    } finally {
-      setBotSpeaking(false);
-      monitoringModeRef.current = "normal";
-      // give VAD a tiny cooldown so immediate playback residues don't trigger
-      ignoreUntilRef.current = performance.now() + 300;
+  // Replace existing stopTTS with this
+const stopTTS = () => {
+  try {
+    const audio = currentAudioRef.current;
+    if (audio) {
+      try { audio.pause(); } catch (e) {}
+      try { audio.muted = true; } catch (e) {}
+      // attempt to jump to end (some browsers block setting currentTime)
+      try { audio.currentTime = audio.duration; } catch (e) {}
+      // remove src and force load
+      try { audio.src = ""; } catch (e) {}
+      try { audio.removeAttribute && audio.removeAttribute('src'); } catch (e) {}
+      try { audio.srcObject = null; } catch (e) {}
+      try { audio.load && audio.load(); } catch (e) {}
+      currentAudioRef.current = null;
     }
-  };
+    if (currentAudioUrlRef.current) {
+      try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
+      currentAudioUrlRef.current = null;
+    }
+  } catch (e) {
+    console.warn("stopTTS error", e);
+  } finally {
+    setBotSpeaking(false);
+    monitoringModeRef.current = "normal";
+    // tiny cooldown so playback residues don't immediately re-trigger VAD
+    ignoreUntilRef.current = performance.now() + 200;
+  }
+};
+
 
   const playTTS = async (text) => {
     try {
@@ -278,12 +288,14 @@ export default function ChatWindow() {
       currentAudioRef.current = audio;
 
       audio.onplay = () => {
+        console.log("[TTS] play started");
         setBotSpeaking(true);
         // still ignore first fragments of playback
         ignoreUntilRef.current = performance.now() + 250;
       };
 
       audio.onended = () => {
+        console.log("[TTS] playback ended naturally");
         monitoringModeRef.current = "normal";
         setBotSpeaking(false);
         lastTTSContentRef.current = "";
@@ -397,10 +409,11 @@ export default function ChatWindow() {
 
           // During playback, raise threshold relative to the pre-playback baseline to reduce false triggers
           if (monitoringModeRef.current === "duringPlayback") {
-            const baseline = baselinePlaybackRef.current || 0;
-            const delta = 0.012; // require RMS to exceed baseline + delta (tweakable)
-            threshold = Math.max(threshold, baseline + delta);
-          }
+  const baseline = baselinePlaybackRef.current || 0;
+  // require RMS > baseline + delta OR > the playback interrupt threshold
+  const delta = PLAYBACK_BASELINE_DELTA; // tuned
+  threshold = Math.max(threshold, baseline + delta);
+}
 
           // VAD: start detection when RMS stays above threshold for speakHoldMs
           if (smoothedRmsRef.current >= threshold) {
@@ -414,6 +427,7 @@ export default function ChatWindow() {
               // If the bot is speaking, STOP TTS immediately BEFORE recording starts
               if (botSpeaking) {
                 interruptDuringPlaybackRef.current = true;
+                console.log("[VAD] user voice detected during playback; stopping TTS...", { rms: smoothedRmsRef.current, baseline: baselinePlaybackRef.current, now });
                 try {
                   stopTTS(); // synchronous immediate stop
                 } catch (e) {
@@ -422,9 +436,9 @@ export default function ChatWindow() {
                 // give audio hardware and echo time to die out, then re-sample baseline & start recording
                 setTimeout(() => {
                   baselinePlaybackRef.current = smoothedRmsRef.current || 0;
-                  ignoreUntilRef.current = performance.now() + 200; // small cushion
+                  ignoreUntilRef.current = performance.now() + 120; // small cushion
                   startVoiceRecording(stream);
-                }, 300); // 300ms chosen empirically; tweak if needed
+                }, 200); // 300ms chosen empirically; tweak if needed
               } else {
                 startVoiceRecording(stream);
               }
@@ -998,19 +1012,22 @@ export default function ChatWindow() {
               aria-hidden
               className="relative w-36 h-36 rounded-full flex items-center justify-center"
               style={{
-                background: isRecording
-                  ? `radial-gradient(circle at 30% 30%, rgba(244,63,94,${0.3 + voiceOrbLevel * 0.5}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(234,88,12,${0.1 + voiceOrbLevel * 0.25}), transparent 40%)`
-                  : botSpeaking
-                    ? "linear-gradient(135deg,#10b981,#059669)"
-                    : `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.25 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.15 + voiceOrbLevel * 0.3}), transparent 40%)`,
-                boxShadow: isRecording
-                  ? `0 12px ${24 + voiceOrbLevel * 30}px rgba(244,63,94,${0.06 + voiceOrbLevel * 0.12})`
-                  : botSpeaking
-                    ? `0 10px ${20 + voiceOrbLevel * 30}px rgba(16,185,129,${0.08 + voiceOrbLevel * 0.16})`
-                    : `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
-                transform: `scale(${1 + voiceOrbLevel * 0.06})`,
-                transition: "transform 120ms linear, box-shadow 160ms linear",
-              }}
+  background: isRecording
+    ? `radial-gradient(circle at 30% 30%, rgba(244,63,94,${0.3 + voiceOrbLevel * 0.5}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(234,88,12,${0.1 + voiceOrbLevel * 0.25}), transparent 40%)`
+    : botSpeaking
+      ? "linear-gradient(135deg,#10b981,#059669)" // green center when AI speaking
+      : `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.25 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.15 + voiceOrbLevel * 0.3}), transparent 40%)`,
+  // solid black ring when bot is speaking
+  border: botSpeaking ? "6px solid rgba(0,0,0,0.75)" : "none",
+  // shadow: red when recording, black glow when speaking, purple otherwise
+  boxShadow: isRecording
+    ? `0 12px ${24 + voiceOrbLevel * 30}px rgba(244,63,94,${0.06 + voiceOrbLevel * 0.12})`
+    : botSpeaking
+      ? `0 10px ${20 + voiceOrbLevel * 30}px rgba(0,0,0,0.7)` // black glow while AI speaks
+      : `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
+  transform: `scale(${1 + voiceOrbLevel * 0.06})`,
+  transition: "transform 120ms linear, box-shadow 160ms linear, border 200ms linear",
+}}
             >
               <div
                 style={{
