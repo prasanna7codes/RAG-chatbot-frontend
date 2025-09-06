@@ -81,8 +81,8 @@ export default function ChatWindow() {
   // allow monitoring to interrupt TTS or be paused; we use modes instead of a single flag
   const monitoringModeRef = useRef("normal"); // "normal" | "duringPlayback"
   // normal threshold tuned to avoid tiny noise; duringPlayback threshold higher to avoid accidental interruptions
-  const BASE_VOICE_THRESHOLD = 0.02; // adjust if too sensitive
-  const PLAYBACK_INTERRUPT_THRESHOLD = 0.04; // user must be louder to interrupt during playback
+ const BASE_VOICE_THRESHOLD = 0.02; // adjust if too sensitive
+ const PLAYBACK_INTERRUPT_THRESHOLD = 0.03; // user must be louder to interrupt during playback
 
   // control variables for VAD debounce
   const vadAboveStartRef = useRef(0);
@@ -195,59 +195,67 @@ export default function ChatWindow() {
     }
   };
 
-  const playTTS = async (text) => {
-    try {
-      // Make sure any existing TTS is stopped
-      stopTTS();
+const playTTS = async (text) => {
+  try {
+    // Stop any existing TTS
+    stopTTS();
 
-      setBotSpeaking(true);
-      monitoringModeRef.current = "duringPlayback";
-      interruptDuringPlaybackRef.current = false;
+    // Ensure audio monitor is running so user interruptions are detected while TTS plays.
+    if (!streamRef.current) {
+      await startContinuousListening();
+    }
 
-      const res = await fetch("https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text));
-      if (!res.ok) throw new Error("TTS fetch failed");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      currentAudioUrlRef.current = url;
-      const audio = new Audio(url);
-      audio.autoplay = false;
-      audio.playsInline = true;
-      audio.volume = 1.0;
-      currentAudioRef.current = audio;
+    // Set mode early so monitor uses the playback threshold immediately
+    monitoringModeRef.current = "duringPlayback";
+    interruptDuringPlaybackRef.current = false;
+    setBotSpeaking(true);
 
-      audio.onended = () => {
-        // restore monitoring mode
-        monitoringModeRef.current = "normal";
-        setBotSpeaking(false);
-        if (currentAudioRef.current === audio) currentAudioRef.current = null;
-        if (currentAudioUrlRef.current) {
-          try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
-          currentAudioUrlRef.current = null;
-        }
-      };
+    const useSsml = true; // set false if you don't want SSML
+const res = await fetch("https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text) + "&use_ssml=" + (useSsml ? "true" : "false"));
 
-      audio.onplay = () => setBotSpeaking(true);
+    if (!res.ok) throw new Error("TTS fetch failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    currentAudioUrlRef.current = url;
+    const audio = new Audio(url);
+    audio.autoplay = false;
+    audio.playsInline = true;
+    audio.volume = 1.0;
+    currentAudioRef.current = audio;
 
-      try {
-        const p = audio.play();
-        if (p && p instanceof Promise) {
-          await p.catch((err) => {
-            console.error("audio.play() rejected:", err);
-            monitoringModeRef.current = "normal";
-            setBotSpeaking(false);
-          });
-        }
-      } catch (err) {
-        console.error("TTS play failed:", err);
-        monitoringModeRef.current = "normal";
-        setBotSpeaking(false);
+    audio.onended = () => {
+      monitoringModeRef.current = "normal";
+      setBotSpeaking(false);
+      if (currentAudioRef.current === audio) currentAudioRef.current = null;
+      if (currentAudioUrlRef.current) {
+        try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
+        currentAudioUrlRef.current = null;
       }
-    } catch (e) {
-      console.error("playTTS error:", e);
+    };
+
+    audio.onplay = () => setBotSpeaking(true);
+
+    try {
+      const p = audio.play();
+      if (p && p instanceof Promise) {
+        await p.catch((err) => {
+          console.error("audio.play() rejected:", err);
+          monitoringModeRef.current = "normal";
+          setBotSpeaking(false);
+        });
+      }
+    } catch (err) {
+      console.error("TTS play failed:", err);
       monitoringModeRef.current = "normal";
       setBotSpeaking(false);
     }
-  };
+  } catch (e) {
+    console.error("playTTS error:", e);
+    monitoringModeRef.current = "normal";
+    setBotSpeaking(false);
+  }
+};
+
 
   // ---------- helper to detect short interrupt phrases ----------
   const isInterruptPhrase = (text) => {
@@ -297,69 +305,78 @@ export default function ChatWindow() {
       dataArrayRef.current = dataArray;
 
       const smoothingAlpha = 0.08; // for RMS smoothing
-      const speakHoldMs = 120; // need 120ms above threshold to count as start of speech
-      const silenceForUtteranceMs = 800; // 0.8s silence triggers STT send
+const NORMAL_SPEAK_HOLD_MS = 120; // normal hold
+const PLAYBACK_SPEAK_HOLD_MS = 60; // faster when bot is speaking
+const silenceForUtteranceMs = 800; // 0.8s silence triggers STT send
 
-      const poll = () => {
-        try {
-          analyserRef.current.getByteTimeDomainData(dataArrayRef.current);
-          let sum = 0;
-          for (let i = 0; i < dataArrayRef.current.length; i++) {
-            const v = (dataArrayRef.current[i] - 128) / 128;
-            sum += v * v;
+const poll = () => {
+  try {
+    analyserRef.current.getByteTimeDomainData(dataArrayRef.current);
+    let sum = 0;
+    for (let i = 0; i < dataArrayRef.current.length; i++) {
+      const v = (dataArrayRef.current[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / dataArrayRef.current.length);
+
+    // smooth RMS (exponential)
+    smoothedRmsRef.current = smoothedRmsRef.current * (1 - smoothingAlpha) + rms * smoothingAlpha;
+
+    // update orb level (scaled)
+    const scaled = Math.max(0, Math.min(1, smoothedRmsRef.current * 12)); // empirical scale
+    smoothedOrbRef.current = smoothedOrbRef.current * 0.85 + scaled * 0.15;
+    setVoiceOrbLevel(smoothedOrbRef.current);
+
+    const now = performance.now();
+
+    // choose threshold depending on monitoring mode
+    const threshold = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_INTERRUPT_THRESHOLD : BASE_VOICE_THRESHOLD;
+    const speakHoldMs = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_SPEAK_HOLD_MS : NORMAL_SPEAK_HOLD_MS;
+
+    // VAD: start detection when RMS stays above threshold for speakHoldMs
+    if (smoothedRmsRef.current >= threshold) {
+      if (!vadAboveStartRef.current) vadAboveStartRef.current = now;
+      vadBelowStartRef.current = 0;
+
+      // if sustained above for hold time, mark user speaking
+      if (!userSpeakingRef.current && now - vadAboveStartRef.current > speakHoldMs) {
+        userSpeakingRef.current = true;
+
+        // If the bot is speaking, STOP TTS immediately BEFORE recording starts
+        if (botSpeaking) {
+          interruptDuringPlaybackRef.current = true;
+          try {
+            stopTTS(); // synchronous immediate stop
+          } catch (e) {
+            console.warn("stopTTS in VAD failed:", e);
           }
-          const rms = Math.sqrt(sum / dataArrayRef.current.length);
-
-          // smooth RMS (exponential)
-          smoothedRmsRef.current = smoothedRmsRef.current * (1 - smoothingAlpha) + rms * smoothingAlpha;
-
-          // update orb level (scaled)
-          const scaled = Math.max(0, Math.min(1, smoothedRmsRef.current * 12)); // empirical scale
-          smoothedOrbRef.current = smoothedOrbRef.current * 0.85 + scaled * 0.15;
-          setVoiceOrbLevel(smoothedOrbRef.current);
-
-          const now = performance.now();
-
-          // choose threshold depending on monitoring mode
-          const threshold = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_INTERRUPT_THRESHOLD : BASE_VOICE_THRESHOLD;
-
-          // VAD: start detection when RMS stays above threshold for speakHoldMs
-          if (smoothedRmsRef.current >= threshold) {
-            if (!vadAboveStartRef.current) vadAboveStartRef.current = now;
-            vadBelowStartRef.current = 0;
-            // if sustained above for hold time, mark user speaking
-            if (!userSpeakingRef.current && now - vadAboveStartRef.current > speakHoldMs) {
-              userSpeakingRef.current = true;
-              // start recording if not already
-              if (!isRecording) {
-                // if bot is speaking, this is user interrupt -> stop TTS and start recording
-                if (botSpeaking) {
-                  interruptDuringPlaybackRef.current = true;
-                  stopTTS(); // stop immediately
-                }
-                startVoiceRecording(stream);
-              }
-            }
-          } else {
-            // below threshold
-            if (!vadBelowStartRef.current) vadBelowStartRef.current = now;
-            if (vadAboveStartRef.current) vadAboveStartRef.current = 0;
-            // if we are currently speaking and silence has lasted silenceForUtteranceMs -> finalize utterance
-            if (userSpeakingRef.current && now - vadBelowStartRef.current > silenceForUtteranceMs) {
-              lastUtteranceAtRef.current = now;
-              userSpeakingRef.current = false;
-              // stop recording and send STT
-              if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-                try { mediaRecorderRef.current.stop(); } catch (e) { console.warn("stop recorder error", e); }
-              }
-            }
-          }
-
-        } catch (e) {
-          console.warn("monitor poll error", e);
+          // tiny delay to let the audio element pause and release audio focus
+          setTimeout(() => startVoiceRecording(stream), 30);
+        } else {
+          // normal path: start recording immediately
+          startVoiceRecording(stream);
         }
-        continuousRafRef.current = requestAnimationFrame(poll);
-      };
+      }
+    } else {
+      // below threshold
+      if (!vadBelowStartRef.current) vadBelowStartRef.current = now;
+      if (vadAboveStartRef.current) vadAboveStartRef.current = 0;
+
+      // if we are currently speaking and silence has lasted silenceForUtteranceMs -> finalize utterance
+      if (userSpeakingRef.current && now - vadBelowStartRef.current > silenceForUtteranceMs) {
+        lastUtteranceAtRef.current = now;
+        userSpeakingRef.current = false;
+        // stop recording and send STT
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+          try { mediaRecorderRef.current.stop(); } catch (e) { console.warn("stop recorder error", e); }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("monitor poll error", e);
+  }
+  continuousRafRef.current = requestAnimationFrame(poll);
+};
 
       continuousRafRef.current = requestAnimationFrame(poll);
 
@@ -384,26 +401,34 @@ export default function ChatWindow() {
 
   // ---------- continuous "always-on" mic for voice mode ----------
   const startContinuousListening = async () => {
-    try {
-      const constraints = {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 48000,
-        },
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-      if (audioMonitorRef.current) {
-        audioMonitorRef.current();
-        audioMonitorRef.current = null;
-      }
-      audioMonitorRef.current = await startAudioMonitorCore(stream);
-    } catch (e) {
-      console.error("startContinuousListening error", e);
-      setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Microphone access denied or unavailable." }]);
+  try {
+    const constraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: 48000,
+      },
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    streamRef.current = stream;
+
+    // stop existing monitor if any
+    if (audioMonitorRef.current) {
+      try { audioMonitorRef.current(); } catch (e) {}
+      audioMonitorRef.current = null;
     }
-  };
+
+    // startAudioMonitorCore returns a stop fn; await to ensure monitor is ready
+    audioMonitorRef.current = await startAudioMonitorCore(stream);
+    console.log("startContinuousListening: monitor started");
+    return true;
+  } catch (e) {
+    console.error("startContinuousListening error", e);
+    setMessages((prev) => [...prev, { sender: "ai", text: "⚠️ Microphone access denied or unavailable." }]);
+    return false;
+  }
+};
+
 
   const stopContinuousListening = () => {
     try {
@@ -758,7 +783,7 @@ export default function ChatWindow() {
       const aiMessage = data.answer || "Sorry, I could not find an answer.";
 
       // 🔊 just play TTS
-      playTTS(stripMarkdownForSpeech(aiMessage));
+      playTTS(stripMarkdownForSpeech(aiMessage), true);
 
     } catch (e) {
       console.error("Voice flow error:", e);
