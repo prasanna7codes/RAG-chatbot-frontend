@@ -80,10 +80,10 @@ export default function ChatWindow() {
   // allow monitoring to interrupt TTS or be paused; we use modes instead of a single flag
   const monitoringModeRef = useRef("normal"); // "normal" | "duringPlayback"
   // normal threshold tuned to avoid tiny noise; duringPlayback threshold higher to avoid accidental interruptions
-  const BASE_VOICE_THRESHOLD = 0.016;      // was 0.02 — slightly more sensitive
-const PLAYBACK_INTERRUPT_THRESHOLD = 0.025; // was 0.03
-// smaller delta so user voice can exceed baseline while playback present
-const PLAYBACK_BASELINE_DELTA = 0.008; // new constant, use in poll
+  const BASE_VOICE_THRESHOLD = 0.016; // was 0.02 — slightly more sensitive
+  const PLAYBACK_INTERRUPT_THRESHOLD = 0.025; // was 0.03
+  // smaller delta so user voice can exceed baseline while playback present
+  const PLAYBACK_BASELINE_DELTA = 0.008; // new constant, use in poll
 
   // control variables for VAD debounce
   const vadAboveStartRef = useRef(0);
@@ -138,7 +138,7 @@ const PLAYBACK_BASELINE_DELTA = 0.008; // new constant, use in poll
     if (!s) return s;
     const lines = s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (lines.length <= 1) return s;
-    const avgLen = lines.reduce((a,b) => a + b.length, 0) / lines.length;
+    const avgLen = lines.reduce((a, b) => a + b.length, 0) / lines.length;
     if (avgLen < 48 && lines.length <= 20) {
       return lines.join(", ") + (s.trim().endsWith(".") ? "" : ".");
     }
@@ -220,35 +220,34 @@ const PLAYBACK_BASELINE_DELTA = 0.008; // new constant, use in poll
 
   // ===== TTS playback helpers (interruptible) =====
   // Replace existing stopTTS with this
-const stopTTS = () => {
-  try {
-    const audio = currentAudioRef.current;
-    if (audio) {
-      try { audio.pause(); } catch (e) {}
-      try { audio.muted = true; } catch (e) {}
-      // attempt to jump to end (some browsers block setting currentTime)
-      try { audio.currentTime = audio.duration; } catch (e) {}
-      // remove src and force load
-      try { audio.src = ""; } catch (e) {}
-      try { audio.removeAttribute && audio.removeAttribute('src'); } catch (e) {}
-      try { audio.srcObject = null; } catch (e) {}
-      try { audio.load && audio.load(); } catch (e) {}
-      currentAudioRef.current = null;
+  const stopTTS = () => {
+    try {
+      const audio = currentAudioRef.current;
+      if (audio) {
+        try { audio.pause(); } catch (e) {}
+        try { audio.muted = true; } catch (e) {}
+        // attempt to jump to end (some browsers block setting currentTime)
+        try { audio.currentTime = audio.duration; } catch (e) {}
+        // remove src and force load
+        try { audio.src = ""; } catch (e) {}
+        try { audio.removeAttribute && audio.removeAttribute('src'); } catch (e) {}
+        try { audio.srcObject = null; } catch (e) {}
+        try { audio.load && audio.load(); } catch (e) {}
+        currentAudioRef.current = null;
+      }
+      if (currentAudioUrlRef.current) {
+        try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
+        currentAudioUrlRef.current = null;
+      }
+    } catch (e) {
+      console.warn("stopTTS error", e);
+    } finally {
+      setBotSpeaking(false);
+      monitoringModeRef.current = "normal";
+      // tiny cooldown so playback residues don't immediately re-trigger VAD
+      ignoreUntilRef.current = performance.now() + 200;
     }
-    if (currentAudioUrlRef.current) {
-      try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) {}
-      currentAudioUrlRef.current = null;
-    }
-  } catch (e) {
-    console.warn("stopTTS error", e);
-  } finally {
-    setBotSpeaking(false);
-    monitoringModeRef.current = "normal";
-    // tiny cooldown so playback residues don't immediately re-trigger VAD
-    ignoreUntilRef.current = performance.now() + 200;
-  }
-};
-
+  };
 
   const playTTS = async (text) => {
     try {
@@ -409,11 +408,11 @@ const stopTTS = () => {
 
           // During playback, raise threshold relative to the pre-playback baseline to reduce false triggers
           if (monitoringModeRef.current === "duringPlayback") {
-  const baseline = baselinePlaybackRef.current || 0;
-  // require RMS > baseline + delta OR > the playback interrupt threshold
-  const delta = PLAYBACK_BASELINE_DELTA; // tuned
-  threshold = Math.max(threshold, baseline + delta);
-}
+            const baseline = baselinePlaybackRef.current || 0;
+            // require RMS > baseline + delta OR > the playback interrupt threshold
+            const delta = PLAYBACK_BASELINE_DELTA; // tuned
+            threshold = Math.max(threshold, baseline + delta);
+          }
 
           // VAD: start detection when RMS stays above threshold for speakHoldMs
           if (smoothedRmsRef.current >= threshold) {
@@ -1008,107 +1007,74 @@ const stopTTS = () => {
 
         <div className="flex flex-col items-center justify-center flex-1 z-10">
           <div className="mb-6">
+            {/* --- START: replaced orb wrapper (single center mic, single pulse) --- */}
             <div
               aria-hidden
               className="relative w-36 h-36 rounded-full flex items-center justify-center"
               style={{
-  background: isRecording
-    ? `radial-gradient(circle at 30% 30%, rgba(244,63,94,${0.3 + voiceOrbLevel * 0.5}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(234,88,12,${0.1 + voiceOrbLevel * 0.25}), transparent 40%)`
-    : botSpeaking
-      ? "linear-gradient(135deg,#10b981,#059669)" // green center when AI speaking
-      : `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.25 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.15 + voiceOrbLevel * 0.3}), transparent 40%)`,
-  // solid black ring when bot is speaking
-  border: botSpeaking ? "6px solid rgba(0,0,0,0.75)" : "none",
-  // shadow: red when recording, black glow when speaking, purple otherwise
-  boxShadow: isRecording
-    ? `0 12px ${24 + voiceOrbLevel * 30}px rgba(244,63,94,${0.06 + voiceOrbLevel * 0.12})`
-    : botSpeaking
-      ? `0 10px ${20 + voiceOrbLevel * 30}px rgba(0,0,0,0.7)` // black glow while AI speaks
-      : `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
-  transform: `scale(${1 + voiceOrbLevel * 0.06})`,
-  transition: "transform 120ms linear, box-shadow 160ms linear, border 200ms linear",
-}}
+                background: isRecording
+                  ? `radial-gradient(circle at 30% 30%, rgba(244,63,94,${0.3 + voiceOrbLevel * 0.5}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(234,88,12,${0.1 + voiceOrbLevel * 0.25}), transparent 40%)`
+                  : botSpeaking
+                    ? "linear-gradient(135deg,#10b981,#059669)"
+                    : `radial-gradient(circle at 30% 30%, rgba(79,70,229,${0.25 + voiceOrbLevel * 0.4}), transparent 30%), radial-gradient(circle at 70% 70%, rgba(99,102,241,${0.15 + voiceOrbLevel * 0.3}), transparent 40%)`,
+                border: botSpeaking ? "6px solid rgba(0,0,0,0.75)" : "none",
+                boxShadow: isRecording
+                  ? `0 12px ${24 + voiceOrbLevel * 30}px rgba(244,63,94,${0.06 + voiceOrbLevel * 0.12})`
+                  : botSpeaking
+                    ? `0 10px ${20 + voiceOrbLevel * 30}px rgba(0,0,0,0.7)`
+                    : `0 8px ${20 + voiceOrbLevel * 30}px rgba(79,70,229,${0.08 + voiceOrbLevel * 0.12})`,
+                transform: `scale(${1 + voiceOrbLevel * 0.06})`,
+                transition: "transform 120ms linear, box-shadow 160ms linear, border 200ms linear",
+              }}
             >
+              {/* soft sheen */}
               <div
-  style={{
-    position: "absolute",
-    width: `${64 + voiceOrbLevel * 36}px`,
-    height: `${64 + voiceOrbLevel * 36}px`,
-    borderRadius: "50%",
-    opacity: 0.08 + voiceOrbLevel * 0.5,
-    transform: `translateZ(0)`,
-    transition: "width 160ms linear, height 160ms linear, opacity 160ms linear",
-    background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
-  }}
-/>
-
-{/* center circle - add orb-bounce when speaking/recording so it visibly bounces */}
-<div
-  className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center ${ (isRecording || botSpeaking) ? "orb-bounce" : "" }`}
-  style={{
-    background: isRecording
-      ? "linear-gradient(135deg,#ff6b6b,#f97316)"
-      : botSpeaking
-      ? "linear-gradient(135deg,#10b981,#059669)"
-      : "linear-gradient(135deg,#6d28d9,#4f46e5)",
-    boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)",
-    transform: `scale(${1 + voiceOrbLevel * 0.04})`,
-    transition: "transform 120ms linear, background 180ms linear",
-  }}
->
-  <Mic className="w-6 h-6 text-white" />
-</div>
-
-{/* pulsing ring when recording */}
-{isRecording && (
-  <span
-    aria-hidden
-    className="orb-pulse"
-    style={{
-      position: "absolute",
-      inset: -8,
-      borderRadius: "50%",
-      boxShadow: `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`,
-    }}
-  />
-)}
-
-{/* pulsing ring when AI is speaking (green pulse) */}
-{!isRecording && botSpeaking && (
-  <span
-    aria-hidden
-    className="orb-pulse"
-    style={{
-      position: "absolute",
-      inset: -8,
-      borderRadius: "50%",
-      boxShadow: `0 0 ${10 + voiceOrbLevel * 28}px rgba(16,185,129,${0.16 + voiceOrbLevel * 0.30})`,
-    }}
-  />
-)}
-              <div
-                className="relative z-10 w-24 h-24 rounded-full flex items-center justify-center"
                 style={{
-                  background: isRecording ? "linear-gradient(135deg,#ff6b6b,#f97316)" : botSpeaking ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#6d28d9,#4f46e5)",
+                  position: "absolute",
+                  width: `${64 + voiceOrbLevel * 36}px`,
+                  height: `${64 + voiceOrbLevel * 36}px`,
+                  borderRadius: "50%",
+                  opacity: 0.08 + voiceOrbLevel * 0.5,
+                  transform: `translateZ(0)`,
+                  transition: "width 160ms linear, height 160ms linear, opacity 160ms linear",
+                  background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
+                }}
+              />
+
+              {/* center circle (single) - add orb-bounce when speaking/recording */}
+              <div
+                className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center ${ (isRecording || botSpeaking) ? "orb-bounce" : "" }`}
+                style={{
+                  background: isRecording
+                    ? "linear-gradient(135deg,#ff6b6b,#f97316)"
+                    : botSpeaking
+                      ? "linear-gradient(135deg,#10b981,#059669)"
+                      : "linear-gradient(135deg,#6d28d9,#4f46e5)",
                   boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)",
+                  transform: `scale(${1 + voiceOrbLevel * 0.04})`,
+                  transition: "transform 120ms linear, background 180ms linear",
                 }}
               >
                 <Mic className="w-6 h-6 text-white" />
               </div>
 
-              {isRecording && (
+              {/* single pulsing ring: red when recording, green when AI is speaking */}
+              {(isRecording || botSpeaking) && (
                 <span
                   aria-hidden
+                  className="orb-pulse"
                   style={{
                     position: "absolute",
                     inset: -8,
                     borderRadius: "50%",
-                    boxShadow: `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`,
-                    animation: "pulse 1200ms infinite ease-in-out",
+                    boxShadow: isRecording
+                      ? `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`
+                      : `0 0 ${10 + voiceOrbLevel * 28}px rgba(16,185,129,${0.16 + voiceOrbLevel * 0.30})`,
                   }}
                 />
               )}
             </div>
+            {/* --- END: replaced orb wrapper --- */}
           </div>
 
           <div className="text-center max-w-sm">
