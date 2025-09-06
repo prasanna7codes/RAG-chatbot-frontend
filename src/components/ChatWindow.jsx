@@ -1030,17 +1030,62 @@ const stopTTS = () => {
 }}
             >
               <div
-                style={{
-                  position: "absolute",
-                  width: `${64 + voiceOrbLevel * 36}px`,
-                  height: `${64 + voiceOrbLevel * 36}px`,
-                  borderRadius: "50%",
-                  opacity: 0.08 + voiceOrbLevel * 0.5,
-                  transform: `translateZ(0)`,
-                  transition: "width 160ms linear, height 160ms linear, opacity 160ms linear",
-                  background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
-                }}
-              />
+  style={{
+    position: "absolute",
+    width: `${64 + voiceOrbLevel * 36}px`,
+    height: `${64 + voiceOrbLevel * 36}px`,
+    borderRadius: "50%",
+    opacity: 0.08 + voiceOrbLevel * 0.5,
+    transform: `translateZ(0)`,
+    transition: "width 160ms linear, height 160ms linear, opacity 160ms linear",
+    background: "radial-gradient(circle, rgba(255,255,255,0.12), rgba(255,255,255,0.02))",
+  }}
+/>
+
+{/* center circle - add orb-bounce when speaking/recording so it visibly bounces */}
+<div
+  className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center ${ (isRecording || botSpeaking) ? "orb-bounce" : "" }`}
+  style={{
+    background: isRecording
+      ? "linear-gradient(135deg,#ff6b6b,#f97316)"
+      : botSpeaking
+      ? "linear-gradient(135deg,#10b981,#059669)"
+      : "linear-gradient(135deg,#6d28d9,#4f46e5)",
+    boxShadow: "inset 0 -6px 14px rgba(0,0,0,0.15)",
+    transform: `scale(${1 + voiceOrbLevel * 0.04})`,
+    transition: "transform 120ms linear, background 180ms linear",
+  }}
+>
+  <Mic className="w-6 h-6 text-white" />
+</div>
+
+{/* pulsing ring when recording */}
+{isRecording && (
+  <span
+    aria-hidden
+    className="orb-pulse"
+    style={{
+      position: "absolute",
+      inset: -8,
+      borderRadius: "50%",
+      boxShadow: `0 0 ${8 + voiceOrbLevel * 20}px rgba(255,99,132,${0.16 + voiceOrbLevel * 0.24})`,
+    }}
+  />
+)}
+
+{/* pulsing ring when AI is speaking (green pulse) */}
+{!isRecording && botSpeaking && (
+  <span
+    aria-hidden
+    className="orb-pulse"
+    style={{
+      position: "absolute",
+      inset: -8,
+      borderRadius: "50%",
+      boxShadow: `0 0 ${10 + voiceOrbLevel * 28}px rgba(16,185,129,${0.16 + voiceOrbLevel * 0.30})`,
+    }}
+  />
+)}
               <div
                 className="relative z-10 w-24 h-24 rounded-full flex items-center justify-center"
                 style={{
