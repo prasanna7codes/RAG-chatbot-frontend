@@ -99,6 +99,54 @@ export default function ChatWindow() {
   // when user interrupts while bot speaking: mark this to handle "interrupt phrases"
   const interruptDuringPlaybackRef = useRef(false);
 
+
+    // --- add these refs near the other refs (e.g. after interruptDuringPlaybackRef)
+  const baselinePlaybackRef = useRef(0); // RMS baseline measured before playback
+  const ignoreUntilRef = useRef(0); // small ignore window to avoid immediate bounce
+  const lastTTSContentRef = useRef(""); // last TTS text (for matching STT echoes)
+
+  // simple normalizer for similarity checks
+  const normalizeTextForCompare = (s = "") =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+
+  // very simple similarity heuristic: if transcript contains most of TTS start or vice-versa
+  const looksLikeEchoOfLastTTS = (transcript) => {
+    try {
+      const t = normalizeTextForCompare(transcript || "");
+      const last = normalizeTextForCompare(lastTTSContentRef.current || "");
+      if (!t || !last) return false;
+      // if either contains the other's first chunk (30+ chars) -> likely echo
+      const checkLen = 30;
+      const a = t.slice(0, checkLen);
+      const b = last.slice(0, checkLen);
+      if (a && last.includes(a)) return true;
+      if (b && t.includes(b)) return true;
+      // fallback: if a short normalized match ratio by substring length
+      const minLen = Math.min(t.length, last.length);
+      if (minLen > 40) {
+        // if first 40 chars equal-ish
+        return t.slice(0, 40) === last.slice(0, 40);
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  // Beautify enumerated answers for display (joins short newline-separated items with commas)
+  const beautifyEnumerations = (s = "") => {
+    if (!s) return s;
+    const lines = s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length <= 1) return s;
+    // if items are short-ish, join with commas
+    const avgLen = lines.reduce((a,b) => a + b.length, 0) / lines.length;
+    if (avgLen < 48 && lines.length <= 20) {
+      return lines.join(", ") + (s.trim().endsWith(".") ? "" : ".");
+    }
+    return s;
+  };
+
+
   function stripMarkdownForSpeech(s = "") {
     if (!s) return "";
     s = s.replace(/^[\s]*[*\-+]\s+/gm, "");
@@ -200,24 +248,33 @@ const playTTS = async (text) => {
     // Stop any existing TTS
     stopTTS();
 
-    // Ensure audio monitor is running so user interruptions are detected while TTS plays.
+    // Save last TTS content so we can detect echoes
+    lastTTSContentRef.current = text;
+
+    // Ensure audio monitor (mic) is running so user interruptions are detected while TTS plays.
     if (!streamRef.current) {
       await startContinuousListening();
     }
+
+    // capture a baseline RMS before playback to reduce false positives from playback echo
+    baselinePlaybackRef.current = smoothedRmsRef.current || 0;
+    // short ignore window (ms) to let playback begin and audio hardware settle
+    ignoreUntilRef.current = performance.now() + 250;
 
     // Set mode early so monitor uses the playback threshold immediately
     monitoringModeRef.current = "duringPlayback";
     interruptDuringPlaybackRef.current = false;
     setBotSpeaking(true);
 
-    const useSsml = true; // set false if you don't want SSML
-const res = await fetch("https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text) + "&use_ssml=" + (useSsml ? "true" : "false"));
+    const useSsml = true;
+    const url = "https://trying-cloud-embedding-again.onrender.com/tts?text=" + encodeURIComponent(text) + "&use_ssml=" + (useSsml ? "true" : "false");
 
+    const res = await fetch(url);
     if (!res.ok) throw new Error("TTS fetch failed");
     const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    currentAudioUrlRef.current = url;
-    const audio = new Audio(url);
+    const urlObj = URL.createObjectURL(blob);
+    currentAudioUrlRef.current = urlObj;
+    const audio = new Audio(urlObj);
     audio.autoplay = false;
     audio.playsInline = true;
     audio.volume = 1.0;
@@ -255,6 +312,7 @@ const res = await fetch("https://trying-cloud-embedding-again.onrender.com/tts?t
     setBotSpeaking(false);
   }
 };
+
 
 
   // ---------- helper to detect short interrupt phrases ----------
@@ -330,8 +388,18 @@ const poll = () => {
     const now = performance.now();
 
     // choose threshold depending on monitoring mode
-    const threshold = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_INTERRUPT_THRESHOLD : BASE_VOICE_THRESHOLD;
+    
+
+
+    let threshold = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_INTERRUPT_THRESHOLD : BASE_VOICE_THRESHOLD;
     const speakHoldMs = monitoringModeRef.current === "duringPlayback" ? PLAYBACK_SPEAK_HOLD_MS : NORMAL_SPEAK_HOLD_MS;
+
+    // During playback, raise threshold relative to the pre-playback baseline to reduce false triggers
+    if (monitoringModeRef.current === "duringPlayback") {
+      const baseline = baselinePlaybackRef.current || 0;
+      const delta = 0.012; // require RMS to exceed baseline + delta (tweakable)
+      threshold = Math.max(threshold, baseline + delta);
+    }
 
     // VAD: start detection when RMS stays above threshold for speakHoldMs
     if (smoothedRmsRef.current >= threshold) {
@@ -498,13 +566,19 @@ const poll = () => {
 
           const transcript = (data.text || "").trim();
           // If user interrupted while playback -> decide whether to send as query
-          if (interruptDuringPlaybackRef.current) {
+           if (interruptDuringPlaybackRef.current) {
             // reset flag
             const wasInterrupt = isInterruptPhrase(transcript);
             interruptDuringPlaybackRef.current = false;
+
+            // If transcript looks like an echo of the last TTS, ignore it.
+            if (looksLikeEchoOfLastTTS(transcript)) {
+              console.log("STT looks like echo of last TTS — dropping:", transcript);
+              return;
+            }
+
             if (wasInterrupt || transcript.length === 0) {
               // user likely just wanted to stop the AI speaking — do nothing further
-              // keep listening (continuous) — do not call sendBotMessageDirect
               console.log("User interrupt detected; not sending to bot:", transcript);
               return;
             } else {
@@ -780,10 +854,16 @@ const poll = () => {
       if (!res.ok) throw new Error("Error fetching answer");
 
       const data = await res.json();
-      const aiMessage = data.answer || "Sorry, I could not find an answer.";
+      const rawAnswer = data.answer || "Sorry, I could not find an answer.";
+      // beautify enumerations for display
+      const displayText = beautifyEnumerations(cleanForDisplay(rawAnswer));
 
-      // 🔊 just play TTS
-      playTTS(stripMarkdownForSpeech(aiMessage), true);
+      // show the AI bubble in UI
+      setMessages((prev) => [...prev, { sender: "ai", text: displayText }]);
+
+      // 🔊 Play TTS — append a polite follow-up question so interaction feels natural
+      const ttsText = stripMarkdownForSpeech(rawAnswer) + " Do you need anything else?";
+      playTTS(ttsText);
 
     } catch (e) {
       console.error("Voice flow error:", e);
@@ -792,6 +872,7 @@ const poll = () => {
     setLoading(false);
     setLastWasVoice(false);
   };
+
 
   // ===== LIVE handoff =====
   const startHumanHandoff = async () => {
@@ -899,9 +980,14 @@ const poll = () => {
   };
 
   // When switching into voice view, start continuous listening automatically
-  useEffect(() => {
+    useEffect(() => {
     if (viewMode === "voice") {
       startContinuousListening();
+      // welcome the user (voice mode) and show the message bubble
+      const welcome = `${botName} here — Hi! How can I help you today?`;
+      setMessages((prev) => [...prev, { sender: "ai", text: welcome }]);
+      // play welcome TTS (no follow up appended here)
+      playTTS(stripMarkdownForSpeech(welcome));
     } else {
       stopContinuousListening();
       stopTTS();
@@ -913,6 +999,7 @@ const poll = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
+
 
   // simple inline waveform SVG (compact, accessible)
   const WaveformIcon = ({ className = "w-4 h-4", title = "waveform" }) => (
